@@ -6,7 +6,6 @@
  */
 
 const PLUGIN_NAME = "GIFboard+";
-const LEGACY_PLUGIN_NAME = "NotAnotherAnimeGIF";
 const DEFAULT_SIZE = {width: 480, height: 560, sidebarWidth: 155, opacity: 0.94, hideOnRightClick: true, autoFavorite: false, keepWithinScreen: true, left: null, top: null};
 const SIZE_LIMITS = {minWidth: 320, maxWidth: 4096, minHeight: 240, maxHeight: 2160, minSidebarWidth: 100, maxSidebarWidth: 360};
 const DATA_VERSION = 1;
