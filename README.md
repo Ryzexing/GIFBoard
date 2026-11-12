@@ -1,1 +1,1 @@
-# GIFBoard-
+# GIFBoard
