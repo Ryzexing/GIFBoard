@@ -1,7 +1,7 @@
 /**
  * @name GIFboard+
  * @author Razik
- * @version 2.2.23
+ * @version 2.2.25
  * @description Organize, search, and send GIFs from your personal library.
  */
 
@@ -65,6 +65,11 @@ const RU_TRANSLATIONS = {
     "Delete": "Удалить",
     "Continue": "Продолжить",
     "Save GIF to folder": "Сохранить GIF в папку",
+    "GIF actions": "Действия с GIF",
+    "Copy link": "Копировать ссылку",
+    "GIF link copied.": "Ссылка на GIF скопирована.",
+    "Could not copy GIF link: {error}": "Не удалось скопировать ссылку на GIF: {error}",
+    "Clipboard API is unavailable.": "Буфер обмена недоступен.",
     "Save image to folder": "Сохранить изображение в папку",
     "Create first folder": "Создать первую папку",
     "\"{name}\" already contains this GIF.": "В папке «{name}» этот GIF уже есть.",
@@ -174,6 +179,12 @@ const STYLE = `
 .gifboard-empty{padding:18px;color:var(--text-muted,#949ba4)}
 .gifboard-context{position:fixed;z-index:2147483647;display:grid;gap:4px;min-width:190px;padding:8px;border:1px solid var(--background-modifier-accent,rgba(255,255,255,.12));border-radius:6px;background:var(--background-floating,#18191c);box-shadow:0 8px 24px rgba(0,0,0,.35)}
 .gifboard-context button{text-align:left}
+.gifboard-context-submenu{position:relative}
+.gifboard-context-submenu-trigger{display:flex;align-items:center;justify-content:space-between;gap:16px;width:100%}
+.gifboard-context-submenu-trigger::after{content:"›";font-size:18px;line-height:1}
+.gifboard-context-submenu-panel{position:absolute;top:0;left:calc(100% - 1px);z-index:1;display:none;box-sizing:border-box;width:220px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow-y:auto;gap:4px;padding:8px;border:1px solid var(--background-modifier-accent,rgba(255,255,255,.12));border-radius:6px;background:var(--background-floating,#18191c);box-shadow:0 8px 24px rgba(0,0,0,.35)}
+.gifboard-context-submenu:hover>.gifboard-context-submenu-panel,.gifboard-context-submenu:focus-within>.gifboard-context-submenu-panel,.gifboard-context-submenu.is-open>.gifboard-context-submenu-panel{display:grid}
+.gifboard-context-submenu--left>.gifboard-context-submenu-panel{right:calc(100% - 1px);left:auto}
 .gifboard-dialog-backdrop{position:fixed;inset:0;z-index:2147483648;display:grid;place-items:center;padding:16px;background:rgba(0,0,0,.55)}
 .gifboard-dialog{box-sizing:border-box;width:min(360px,100%);max-height:calc(100vh - 32px);overflow:auto;padding:16px;border:1px solid var(--background-modifier-accent,rgba(255,255,255,.12));border-radius:8px;background:var(--background-floating,#18191c);box-shadow:0 12px 32px rgba(0,0,0,.4)}
 .gifboard-dialog h3{margin:0 0 8px}
@@ -349,7 +360,6 @@ module.exports = class GIFboardPlus {
         this.toolbar = null;
         this.contextMenu = null;
         this.contextMenuPatches = [];
-        this.pendingPickerMedia = null;
         this.dialog = null;
         this.observer = null;
         this.scanFrame = null;
@@ -368,14 +378,12 @@ module.exports = class GIFboardPlus {
             this.addStyles();
             BdApi.ContextMenu.patch("*", this.patchMessageContextMenu);
             this.contextMenuPatches.push({navId: "*", callback: this.patchMessageContextMenu});
-            BdApi.ContextMenu.patch("gif-picker", this.patchGifPickerContextMenu);
-            this.contextMenuPatches.push({navId: "gif-picker", callback: this.patchGifPickerContextMenu});
             this.observer = new MutationObserver(() => {
                 this.scheduleScan();
             });
             this.observer.observe(document.body, {childList: true, subtree: true});
             document.addEventListener("click", this.onNativePickerTriggerClick, true);
-            document.addEventListener("contextmenu", this.capturePickerContextMenu, true);
+            window.addEventListener("contextmenu", this.capturePickerContextMenu, true);
             window.addEventListener("resize", this.onWindowResize);
             this.scheduleScan();
         }
@@ -398,8 +406,7 @@ module.exports = class GIFboardPlus {
         }
         window.removeEventListener("resize", this.onWindowResize);
         document.removeEventListener("click", this.onNativePickerTriggerClick, true);
-        document.removeEventListener("contextmenu", this.capturePickerContextMenu, true);
-        this.pendingPickerMedia = null;
+        window.removeEventListener("contextmenu", this.capturePickerContextMenu, true);
         for (const {navId, callback} of this.contextMenuPatches) {
             BdApi.ContextMenu.unpatch(navId, callback);
         }
@@ -1805,24 +1812,9 @@ module.exports = class GIFboardPlus {
         });
     }
 
-    patchMessageContextMenu = (returnValue, props) => this.patchMediaContextMenu(returnValue, props, false);
-
-    patchGifPickerContextMenu = (returnValue, props) => this.patchMediaContextMenu(returnValue, props, true);
-
-    patchMediaContextMenu(returnValue, props, pickerMenu) {
+    patchMessageContextMenu = (returnValue, props) => {
         const mediaItem = props?.mediaItem;
-        const pendingPickerMedia = pickerMenu ? this.pendingPickerMedia : null;
-        const target = pendingPickerMedia?.target || props?.target;
-        const picker = this.picker?.contains(target) ? this.picker : this.findPicker();
-        const isPickerTarget = pickerMenu || Boolean(target instanceof Element && picker?.contains(target));
-        const pickerGif = isPickerTarget
-            ? pendingPickerMedia?.target === target
-                ? pendingPickerMedia.gif
-                : target instanceof Element
-                    ? this.extractGifFromTarget(target, [target])
-                    : null
-            : null;
-        if (pickerMenu) this.pendingPickerMedia = null;
+        const target = props?.target;
         const targetMedia = target?.matches?.("img,video")
             ? target
             : target?.querySelector?.("img,video") || target?.closest?.("a")?.querySelector?.("img,video");
@@ -1833,18 +1825,17 @@ module.exports = class GIFboardPlus {
         const rawUrl = mediaItem?.url || mediaItem?.proxyUrl || mediaItem?.proxyURL || mediaItem?.src ||
             props?.src || targetMedia?.currentSrc || targetMedia?.src || targetMedia?.poster ||
             target?.currentSrc || target?.src || target?.poster || targetLink?.href || target?.href ||
-            embeddedMedia?.url || embeddedMedia?.proxyUrl || embeddedMedia?.proxyURL || pickerGif?.url;
+            embeddedMedia?.url || embeddedMedia?.proxyUrl || embeddedMedia?.proxyURL;
         const previewRawUrl = mediaItem?.proxyUrl || mediaItem?.proxyURL ||
             targetMedia?.currentSrc || targetMedia?.src || targetMedia?.poster ||
-            embeddedMedia?.proxyUrl || embeddedMedia?.proxyURL || embeddedMedia?.url || pickerGif?.previewUrl || rawUrl;
+            embeddedMedia?.proxyUrl || embeddedMedia?.proxyURL || embeddedMedia?.url || rawUrl;
         const url = preferredGifUrl(rawUrl);
         const contentType = mediaItem?.contentType || mediaItem?.content_type || "";
         const originalContentType = mediaItem?.originalContentType || mediaItem?.original_content_type || "";
         const isGifMedia = /^image\/gif$/i.test(contentType) ||
             /^image\/gif$/i.test(originalContentType) ||
             this.isKnownGifUrl(url) ||
-            /\.gif(?:$|[?#])/i.test(url || "") ||
-            Boolean(pickerGif);
+            /\.gif(?:$|[?#])/i.test(url || "");
         const isImageMedia = /^image\//i.test(contentType) ||
             /^image\//i.test(originalContentType) ||
             /^video\//i.test(contentType) ||
@@ -1859,7 +1850,7 @@ module.exports = class GIFboardPlus {
             url,
             previewUrl: preferredGifUrl(previewRawUrl) || url,
             title: cleanGifTitle(mediaItem?.filename || mediaItem?.name || mediaItem?.alt ||
-                targetMedia?.alt || target?.alt || pickerGif?.title || ""),
+                targetMedia?.alt || target?.alt || ""),
             favoriteControl: null,
             isFavorite: null
         };
@@ -1888,26 +1879,21 @@ module.exports = class GIFboardPlus {
             items
         });
 
-        if (isPickerTarget) {
-            const insertAt = menuLocation.copyLinkIndex >= 0 ? menuLocation.copyLinkIndex + 1 : 0;
-            menuLocation.items.splice(insertAt, 0, menuItem);
-        } else {
-            const separator = BdApi.ContextMenu.buildItem({type: "separator", id: "gifboard-folder-separator"});
-            menuLocation.items.unshift(menuItem, separator);
-        }
+        const separator = BdApi.ContextMenu.buildItem({type: "separator", id: "gifboard-folder-separator"});
+        menuLocation.items.unshift(menuItem, separator);
         return returnValue;
-    }
+    };
 
     capturePickerContextMenu = event => {
         const target = event.target instanceof Element ? event.target : event.target?.parentElement;
         const picker = this.picker?.contains(target) ? this.picker : this.findPicker();
-        if (!target || !picker?.contains(target)) {
-            this.pendingPickerMedia = null;
-            return;
-        }
+        if (!target || !picker?.contains(target)) return;
         const eventPath = typeof event.composedPath === "function" ? event.composedPath() : [target];
         const gif = this.extractGifFromTarget(target, eventPath);
-        this.pendingPickerMedia = gif ? {target, gif} : null;
+        if (!gif?.url) return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.showContextMenu(event.clientX, event.clientY, gif, true);
     };
 
     findContextMenuItems(root) {
@@ -2069,24 +2055,110 @@ module.exports = class GIFboardPlus {
         return null;
     }
 
-    showContextMenu(x, y, gif) {
+    showContextMenu(x, y, gif, includeCopyLink = false) {
         this.closeContextMenu();
         const menu = document.createElement("div");
         menu.className = "gifboard-tools gifboard-context";
         menu.setAttribute("role", "menu");
-        const label = document.createElement("strong");
-        label.textContent = this.t("Save GIF to folder");
-        menu.append(label);
+        let submenuEntry = null;
+        let submenuPanel = null;
+        if (includeCopyLink) {
+            menu.setAttribute("aria-label", this.t("GIF actions"));
+            menu.append(this.makeButton("Copy link", () => {
+                this.closeContextMenu();
+                this.copyGifLink(gif);
+            }));
+            submenuEntry = document.createElement("div");
+            submenuEntry.className = "gifboard-context-submenu";
+            const submenuId = `gifboard-folder-submenu-${Date.now()}`;
+            const trigger = this.makeButton("Save GIF to folder", () => {}, "gifboard-context-submenu-trigger");
+            trigger.setAttribute("aria-haspopup", "menu");
+            trigger.setAttribute("aria-expanded", "false");
+            trigger.setAttribute("aria-controls", submenuId);
+            submenuPanel = document.createElement("div");
+            submenuPanel.id = submenuId;
+            submenuPanel.className = "gifboard-context-submenu-panel";
+            submenuPanel.setAttribute("role", "menu");
+            submenuPanel.setAttribute("aria-label", this.t("GIF folders"));
+            submenuPanel.append(...this.createContextFolderButtons(gif));
+            submenuEntry.append(trigger, submenuPanel);
+
+            const openSubmenu = () => {
+                submenuEntry.classList.add("is-open");
+                trigger.setAttribute("aria-expanded", "true");
+                const triggerBounds = trigger.getBoundingClientRect();
+                const entryBounds = submenuEntry.getBoundingClientRect();
+                const panelBounds = submenuPanel.getBoundingClientRect();
+                if (menu.getBoundingClientRect().right + panelBounds.width > window.innerWidth - 8) {
+                    submenuEntry.classList.add("gifboard-context-submenu--left");
+                }
+                else {
+                    submenuEntry.classList.remove("gifboard-context-submenu--left");
+                }
+                const panelHeight = Math.min(submenuPanel.scrollHeight, window.innerHeight - 16);
+                const panelTop = Math.max(8, Math.min(triggerBounds.top, window.innerHeight - panelHeight - 8));
+                submenuPanel.style.top = `${panelTop - entryBounds.top}px`;
+            };
+            const closeSubmenu = () => {
+                submenuEntry.classList.remove("is-open");
+                trigger.setAttribute("aria-expanded", "false");
+            };
+            trigger.addEventListener("mouseenter", openSubmenu);
+            trigger.addEventListener("focus", openSubmenu);
+            trigger.addEventListener("click", event => {
+                event.preventDefault();
+                openSubmenu();
+            });
+            submenuEntry.addEventListener("mouseleave", event => {
+                if (event.relatedTarget instanceof Node && submenuEntry.contains(event.relatedTarget)) return;
+                if (!submenuEntry.contains(document.activeElement)) closeSubmenu();
+            });
+            submenuEntry.addEventListener("focusout", event => {
+                if (event.relatedTarget instanceof Node && submenuEntry.contains(event.relatedTarget)) return;
+                closeSubmenu();
+            });
+            menu.append(submenuEntry);
+        }
+        else {
+            const label = document.createElement("strong");
+            label.textContent = this.t("Save GIF to folder");
+            menu.append(label, ...this.createContextFolderButtons(gif));
+            menu.style.maxHeight = "calc(100vh - 16px)";
+            menu.style.overflowY = "auto";
+        }
+        document.documentElement.append(menu);
+        const bounds = menu.getBoundingClientRect();
+        menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - bounds.width - 8))}px`;
+        menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - bounds.height - 8))}px`;
+        if (submenuEntry && submenuPanel) {
+            const menuBounds = menu.getBoundingClientRect();
+            if (menuBounds.right + 220 > window.innerWidth - 8) {
+                submenuEntry.classList.add("gifboard-context-submenu--left");
+            }
+        }
+        this.contextMenu = menu;
+        this.onContextOutside = event => {
+            if (!menu.contains(event.target)) this.closeContextMenu();
+        };
+        this.onContextKey = event => {
+            if (event.key === "Escape") this.closeContextMenu();
+        };
+        document.addEventListener("click", this.onContextOutside);
+        document.addEventListener("keydown", this.onContextKey, true);
+    }
+
+    createContextFolderButtons(gif) {
         if (!this.state.folders.length) {
-            menu.append(this.makeButton("Create first folder", () => {
+            return [this.makeButton("Create first folder", () => {
                 this.closeContextMenu();
                 this.createFolder();
-            }));
+            })];
         }
-        this.state.folders.forEach(folder => {
+        return this.state.folders.map(folder => {
             const exists = folder.gifs.some(item => gifKey(item) === gifKey(gif));
             const button = this.makeButton(`${exists ? "✓ " : ""}${folder.name}`, () => {}, "", false);
             button.dataset.folderId = folder.id;
+            button.setAttribute("role", "menuitem");
             let pointerSelected = false;
             button.addEventListener("pointerdown", event => {
                 event.preventDefault();
@@ -2103,20 +2175,26 @@ module.exports = class GIFboardPlus {
                 }
                 this.selectContextFolder(folder, gif, exists);
             });
-            menu.append(button);
+            return button;
         });
-        menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - 210))}px`;
-        menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - 260))}px`;
-        document.documentElement.append(menu);
-        this.contextMenu = menu;
-        this.onContextOutside = event => {
-            if (!menu.contains(event.target)) this.closeContextMenu();
-        };
-        this.onContextKey = event => {
-            if (event.key === "Escape") this.closeContextMenu();
-        };
-        document.addEventListener("click", this.onContextOutside);
-        document.addEventListener("keydown", this.onContextKey, true);
+    }
+
+    async copyGifLink(gif) {
+        const url = preferredGifUrl(gif?.url);
+        if (!url) return this.notify("This GIF has an invalid URL.", "error");
+        try {
+            if (typeof navigator.clipboard?.writeText !== "function") {
+                throw new Error("Clipboard API is unavailable.");
+            }
+            await navigator.clipboard.writeText(url);
+            this.notify("GIF link copied.");
+        }
+        catch (error) {
+            console.error(`[${PLUGIN_NAME}] Could not copy GIF link:`, error);
+            this.notify(this.t("Could not copy GIF link: {error}", {
+                error: this.translateError(error.message)
+            }), "error");
+        }
     }
 
     showFolderContextMenu(x, y, folder) {
