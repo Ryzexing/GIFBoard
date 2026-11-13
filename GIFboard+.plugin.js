@@ -1,7 +1,7 @@
 /**
  * @name GIFboard+
  * @author Razik
- * @version 2.1.3
+ * @version 2.2.23
  * @description Organize, search, and send GIFs from your personal library.
  */
 
@@ -65,6 +65,7 @@ const RU_TRANSLATIONS = {
     "Delete": "Удалить",
     "Continue": "Продолжить",
     "Save GIF to folder": "Сохранить GIF в папку",
+    "Save image to folder": "Сохранить изображение в папку",
     "Create first folder": "Создать первую папку",
     "\"{name}\" already contains this GIF.": "В папке «{name}» этот GIF уже есть.",
     "Library writes are disabled to protect unreadable data. Import a valid backup first.": "Запись в библиотеку отключена, чтобы защитить повреждённые данные. Сначала импортируйте корректную резервную копию.",
@@ -104,14 +105,12 @@ const RU_TRANSLATIONS = {
     "Could not send GIF to Discord": "Не удалось отправить GIF в Discord",
     "Could not add GIF to Discord Favorites": "Не удалось добавить GIF в избранное Discord",
     "Create new folder": "Создать новую папку",
-    "Download a JSON backup of your folders and saved GIFs.": "Скачать JSON-резервную копию папок и сохранённых GIF.",
-    "Merge a GIFboard JSON backup into this library; duplicates are skipped.": "Объединить JSON-копию GIFboard с этой библиотекой; дубликаты будут пропущены.",
-    "Added: {added}; duplicates skipped: {duplicates}; invalid files: {invalid}.": "Добавлено: {added}; дубликатов пропущено: {duplicates}; неподходящих файлов: {invalid}.",
-    "Could not read dropped GIF \"{name}\": {error}": "Не удалось прочитать GIF «{name}»: {error}",
-    "Local GIFs can be previewed, but sending them from the library is not available yet.": "Локальные GIF можно просматривать, но отправка из библиотеки пока не поддерживается.",
-    "GIF folder actions": "Действия с папкой GIF",
+    "Download folder": "Скачать папку",
+    "Only one GIFboard JSON backup can be imported at a time.": "Перетаскивайте только одну JSON-копию GIFboard за раз.",
+    "Drop GIF files onto a folder, or drop a GIFboard JSON backup anywhere in the library.": "GIF-файлы перетаскивайте на папку, а JSON-копию GIFboard — в любое место библиотеки.",
     "Import a GIFboard backup": "Импортировать резервную копию GIFboard",
-    "Export a GIFboard backup": "Экспортировать резервную копию GIFboard"
+    "Export a GIFboard backup": "Экспортировать резервную копию GIFboard",
+    "Add to folder": "Добавить в папку"
 };
 
 const STYLE = `
@@ -127,6 +126,7 @@ const STYLE = `
 .gifboard-native-hidden{visibility:hidden!important;pointer-events:none!important}
 .gifboard-backdrop[hidden]{display:none}
 .gifboard-overlay{position:fixed;display:flex;flex-direction:column;box-sizing:border-box;min-width:0;min-height:0;width:var(--gifboard-library-width,480px);height:var(--gifboard-library-height,560px);max-width:none;max-height:none;pointer-events:auto;background:rgba(12,13,16,var(--gifboard-opacity,.94));backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.08);border-radius:8px;overflow:visible;box-shadow:0 8px 26px rgba(0,0,0,.3)}
+.gifboard-overlay.gifboard-file-drop-active{outline:2px dashed var(--brand-500,#5865f2);outline-offset:-6px}
 .gifboard-resize-handle{position:absolute;z-index:2;display:block;margin:0;padding:0;border:0;background:transparent;touch-action:none}
 .gifboard-resize-handle[data-resize=n]{top:-4px;right:10px;left:10px;height:8px;cursor:ns-resize}
 .gifboard-resize-handle[data-resize=s]{right:10px;bottom:-4px;left:10px;height:8px;cursor:ns-resize}
@@ -308,7 +308,7 @@ function normalizeState(value) {
             if (seen.has(key)) continue;
             seen.add(key);
             gifs.push({
-                id: dataUrl ? (typeof item.id === "string" && item.id ? item.id : createGifId()) : null,
+                id: typeof item.id === "string" && item.id ? item.id : createGifId(),
                 url: url || null,
                 dataUrl,
                 filename: dataUrl && typeof item.filename === "string" ? item.filename.slice(0, 255) : "",
@@ -348,6 +348,8 @@ module.exports = class GIFboardPlus {
         this.toggle = null;
         this.toolbar = null;
         this.contextMenu = null;
+        this.contextMenuPatches = [];
+        this.pendingPickerMedia = null;
         this.dialog = null;
         this.observer = null;
         this.scanFrame = null;
@@ -364,12 +366,16 @@ module.exports = class GIFboardPlus {
         try {
             this.loadData();
             this.addStyles();
+            BdApi.ContextMenu.patch("*", this.patchMessageContextMenu);
+            this.contextMenuPatches.push({navId: "*", callback: this.patchMessageContextMenu});
+            BdApi.ContextMenu.patch("gif-picker", this.patchGifPickerContextMenu);
+            this.contextMenuPatches.push({navId: "gif-picker", callback: this.patchGifPickerContextMenu});
             this.observer = new MutationObserver(() => {
                 this.scheduleScan();
             });
             this.observer.observe(document.body, {childList: true, subtree: true});
-            document.addEventListener("contextmenu", this.onPickerContextMenu, true);
             document.addEventListener("click", this.onNativePickerTriggerClick, true);
+            document.addEventListener("contextmenu", this.capturePickerContextMenu, true);
             window.addEventListener("resize", this.onWindowResize);
             this.scheduleScan();
         }
@@ -391,8 +397,13 @@ module.exports = class GIFboardPlus {
             this.saveSettings();
         }
         window.removeEventListener("resize", this.onWindowResize);
-        document.removeEventListener("contextmenu", this.onPickerContextMenu, true);
         document.removeEventListener("click", this.onNativePickerTriggerClick, true);
+        document.removeEventListener("contextmenu", this.capturePickerContextMenu, true);
+        this.pendingPickerMedia = null;
+        for (const {navId, callback} of this.contextMenuPatches) {
+            BdApi.ContextMenu.unpatch(navId, callback);
+        }
+        this.contextMenuPatches = [];
         this.onResizeEnd();
         this.onSidebarResizeEnd();
         this.onMoveEnd();
@@ -404,6 +415,9 @@ module.exports = class GIFboardPlus {
         this.overlay?.removeEventListener("mousedown", this.stopNativePickerDismissal);
         this.overlay?.removeEventListener("click", this.stopNativePickerDismissal);
         this.overlay?.removeEventListener("contextmenu", this.onLibraryContextMenu);
+        this.overlay?.removeEventListener("dragover", this.onLibraryDragOver, true);
+        this.overlay?.removeEventListener("dragleave", this.onLibraryDragLeave, true);
+        this.overlay?.removeEventListener("drop", this.onLibraryDrop, true);
         this.toggle?.remove();
         this.toolbar?.remove();
         this.overlay?.remove();
@@ -761,6 +775,9 @@ module.exports = class GIFboardPlus {
             this.overlay.addEventListener("mousedown", this.stopNativePickerDismissal);
             this.overlay.addEventListener("click", this.stopNativePickerDismissal);
             this.overlay.addEventListener("contextmenu", this.onLibraryContextMenu);
+            this.overlay.addEventListener("dragover", this.onLibraryDragOver, true);
+            this.overlay.addEventListener("dragleave", this.onLibraryDragLeave, true);
+            this.overlay.addEventListener("drop", this.onLibraryDrop, true);
             this.libraryBackdrop.append(this.overlay);
             document.documentElement.append(this.libraryBackdrop);
             this.renderLibrary();
@@ -875,6 +892,42 @@ module.exports = class GIFboardPlus {
         if (!this.settings.hideOnRightClick) return;
         event.stopPropagation();
         this.toggleLibrary(false);
+    };
+
+    onLibraryDragOver = event => {
+        const transfer = event.dataTransfer;
+        if (!transfer || !Array.from(transfer.types).includes("Files")) return;
+        event.preventDefault();
+        transfer.dropEffect = "copy";
+        this.overlay?.classList.add("gifboard-file-drop-active");
+    };
+
+    onLibraryDragLeave = event => {
+        const nextTarget = event.relatedTarget;
+        if (nextTarget instanceof Node && this.overlay?.contains(nextTarget)) return;
+        this.overlay?.classList.remove("gifboard-file-drop-active");
+    };
+
+    onLibraryDrop = event => {
+        this.overlay?.classList.remove("gifboard-file-drop-active");
+        const files = Array.from(event.dataTransfer?.files || []);
+        const target = event.target instanceof Element ? event.target : null;
+        const jsonFiles = files.filter(file => /\.json$/i.test(file.name) || file.type === "application/json");
+        if (jsonFiles.length) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (files.length !== 1 || jsonFiles.length !== 1) {
+                this.notify("Only one GIFboard JSON backup can be imported at a time.", "error");
+                return;
+            }
+            this.importLibraryFile(jsonFiles[0]);
+            return;
+        }
+        if (target?.closest(".gifboard-folder")) return;
+        event.preventDefault();
+        if (files.length) {
+            this.notify("Drop GIF files onto a folder, or drop a GIFboard JSON backup anywhere in the library.", "info");
+        }
     };
 
     stopNativePickerDismissal = event => {
@@ -1674,15 +1727,20 @@ module.exports = class GIFboardPlus {
     }
 
     addGifToFolder(folderId, rawGif) {
-        const url = preferredGifUrl(rawGif.url);
+        const rawUrl = rawGif?.url || rawGif?.proxyUrl || rawGif?.proxyURL || rawGif?.src;
+        const url = preferredGifUrl(rawUrl);
         if (!url) {
             this.notify("This GIF has no valid HTTP(S) URL.", "error");
             return false;
         }
         const gif = {
+            id: createGifId(),
             url,
+            dataUrl: null,
+            filename: "",
+            sizeBytes: null,
             previewUrl: preferredGifUrl(rawGif.previewUrl) || url,
-            title: typeof rawGif.title === "string" ? rawGif.title.slice(0, 256) : "",
+            title: cleanGifTitle(rawGif.title || ""),
             addedAt: Date.now()
         };
         const success = this.mutateLibrary(state => {
@@ -1694,7 +1752,7 @@ module.exports = class GIFboardPlus {
             folder.gifs.push(gif);
         });
         if (success) {
-            if (this.settings.autoFavorite) this.addToDiscordFavorites(rawGif);
+            if (this.settings.autoFavorite && rawGif.favoriteControl) this.addToDiscordFavorites(rawGif);
             this.selectedFolder = folderId;
             this.toggleLibrary(true);
             this.notify("GIF added to folder.");
@@ -1747,16 +1805,151 @@ module.exports = class GIFboardPlus {
         });
     }
 
-    onPickerContextMenu = event => {
+    patchMessageContextMenu = (returnValue, props) => this.patchMediaContextMenu(returnValue, props, false);
+
+    patchGifPickerContextMenu = (returnValue, props) => this.patchMediaContextMenu(returnValue, props, true);
+
+    patchMediaContextMenu(returnValue, props, pickerMenu) {
+        const mediaItem = props?.mediaItem;
+        const pendingPickerMedia = pickerMenu ? this.pendingPickerMedia : null;
+        const target = pendingPickerMedia?.target || props?.target;
+        const picker = this.picker?.contains(target) ? this.picker : this.findPicker();
+        const isPickerTarget = pickerMenu || Boolean(target instanceof Element && picker?.contains(target));
+        const pickerGif = isPickerTarget
+            ? pendingPickerMedia?.target === target
+                ? pendingPickerMedia.gif
+                : target instanceof Element
+                    ? this.extractGifFromTarget(target, [target])
+                    : null
+            : null;
+        if (pickerMenu) this.pendingPickerMedia = null;
+        const targetMedia = target?.matches?.("img,video")
+            ? target
+            : target?.querySelector?.("img,video") || target?.closest?.("a")?.querySelector?.("img,video");
+        const targetLink = target?.tagName === "A" ? target : target?.closest?.("a");
+        const embeds = props?.message?.embeds;
+        const singleEmbed = Array.isArray(embeds) && embeds.length === 1 ? embeds[0] : null;
+        const embeddedMedia = singleEmbed?.image || singleEmbed?.thumbnail || singleEmbed?.video;
+        const rawUrl = mediaItem?.url || mediaItem?.proxyUrl || mediaItem?.proxyURL || mediaItem?.src ||
+            props?.src || targetMedia?.currentSrc || targetMedia?.src || targetMedia?.poster ||
+            target?.currentSrc || target?.src || target?.poster || targetLink?.href || target?.href ||
+            embeddedMedia?.url || embeddedMedia?.proxyUrl || embeddedMedia?.proxyURL || pickerGif?.url;
+        const previewRawUrl = mediaItem?.proxyUrl || mediaItem?.proxyURL ||
+            targetMedia?.currentSrc || targetMedia?.src || targetMedia?.poster ||
+            embeddedMedia?.proxyUrl || embeddedMedia?.proxyURL || embeddedMedia?.url || pickerGif?.previewUrl || rawUrl;
+        const url = preferredGifUrl(rawUrl);
+        const contentType = mediaItem?.contentType || mediaItem?.content_type || "";
+        const originalContentType = mediaItem?.originalContentType || mediaItem?.original_content_type || "";
+        const isGifMedia = /^image\/gif$/i.test(contentType) ||
+            /^image\/gif$/i.test(originalContentType) ||
+            this.isKnownGifUrl(url) ||
+            /\.gif(?:$|[?#])/i.test(url || "") ||
+            Boolean(pickerGif);
+        const isImageMedia = /^image\//i.test(contentType) ||
+            /^image\//i.test(originalContentType) ||
+            /^video\//i.test(contentType) ||
+            /^video\//i.test(originalContentType) ||
+            /^(?:IMG|VIDEO)$/i.test(targetMedia?.tagName || target?.tagName || "") ||
+            isGifMedia;
+        if (!url || (!isGifMedia && !isImageMedia)) return returnValue;
+        const menuLocation = this.findContextMenuItems(returnValue);
+        if (!menuLocation || this.hasContextMenuItem(returnValue, "gifboard-add-to-folder")) return returnValue;
+
+        const gif = {
+            url,
+            previewUrl: preferredGifUrl(previewRawUrl) || url,
+            title: cleanGifTitle(mediaItem?.filename || mediaItem?.name || mediaItem?.alt ||
+                targetMedia?.alt || target?.alt || pickerGif?.title || ""),
+            favoriteControl: null,
+            isFavorite: null
+        };
+        const items = this.state.folders.length
+            ? this.state.folders.map(folder => {
+                const exists = folder.gifs.some(item => gifKey(item) === gifKey(gif));
+                return {
+                    id: `gifboard-folder-${folder.id}`,
+                    label: `${exists ? "✓ " : ""}${folder.name}`,
+                    disabled: exists,
+                    action: () => {
+                        if (!exists) this.addGifToFolder(folder.id, gif);
+                    }
+                };
+            })
+            : [{
+                id: `gifboard-create-first-folder-${Date.now()}`,
+                label: this.t("Create first folder"),
+                action: () => this.createFolder()
+            }];
+
+        const menuItem = BdApi.ContextMenu.buildItem({
+            type: "submenu",
+            id: "gifboard-add-to-folder",
+            label: this.t("Add to folder"),
+            items
+        });
+
+        if (isPickerTarget) {
+            const insertAt = menuLocation.copyLinkIndex >= 0 ? menuLocation.copyLinkIndex + 1 : 0;
+            menuLocation.items.splice(insertAt, 0, menuItem);
+        } else {
+            const separator = BdApi.ContextMenu.buildItem({type: "separator", id: "gifboard-folder-separator"});
+            menuLocation.items.unshift(menuItem, separator);
+        }
+        return returnValue;
+    }
+
+    capturePickerContextMenu = event => {
         const target = event.target instanceof Element ? event.target : event.target?.parentElement;
-        if (!target || this.overlay?.contains(target)) return;
-        const path = typeof event.composedPath === "function" ? event.composedPath() : [];
-        const gif = this.extractGifFromTarget(target, path);
-        if (!gif) return;
-        event.preventDefault();
-        event.stopPropagation();
-        this.showContextMenu(event.clientX, event.clientY, gif);
+        const picker = this.picker?.contains(target) ? this.picker : this.findPicker();
+        if (!target || !picker?.contains(target)) {
+            this.pendingPickerMedia = null;
+            return;
+        }
+        const eventPath = typeof event.composedPath === "function" ? event.composedPath() : [target];
+        const gif = this.extractGifFromTarget(target, eventPath);
+        this.pendingPickerMedia = gif ? {target, gif} : null;
     };
+
+    findContextMenuItems(root) {
+        const visited = new Set();
+        let fallback = null;
+        const visit = (node, depth = 0) => {
+            if (node == null || depth > 12) return null;
+            if (Array.isArray(node)) {
+                if (!fallback && node.some(item => item && typeof item === "object")) {
+                    fallback = node;
+                }
+                const copyLinkIndex = node.findIndex(item => this.isCopyLinkContextMenuItem(item));
+                if (copyLinkIndex >= 0) return {items: node, copyLinkIndex};
+                for (const item of node) {
+                    const found = visit(item, depth + 1);
+                    if (found) return found;
+                }
+                return null;
+            }
+            if (typeof node !== "object" || visited.has(node)) return null;
+            visited.add(node);
+            return visit(node.props?.children, depth + 1);
+        };
+        return visit(root) || (fallback ? {items: fallback, copyLinkIndex: -1} : null);
+    }
+
+    isCopyLinkContextMenuItem(item) {
+        const identifiers = [item?.key, item?.props?.id, item?.props?.["data-menu-item"]]
+            .filter(value => typeof value === "string")
+            .join(" ")
+            .toLowerCase();
+        return /(?:^|[-_:])copy[-_]?link(?:$|[-_:])/.test(identifiers);
+    }
+
+    hasContextMenuItem(root, id, depth = 0, visited = new Set()) {
+        if (root == null || depth > 12) return false;
+        if (Array.isArray(root)) return root.some(item => this.hasContextMenuItem(item, id, depth + 1, visited));
+        if (typeof root !== "object" || visited.has(root)) return false;
+        visited.add(root);
+        if (root.key === id || root.props?.id === id) return true;
+        return this.hasContextMenuItem(root.props?.children, id, depth + 1, visited);
+    }
 
     extractGifFromTarget(target, eventPath) {
         let boundary = this.picker?.contains(target) ? this.picker : this.findPicker();
@@ -1790,7 +1983,7 @@ module.exports = class GIFboardPlus {
                 const media = candidate.matches("source") ? candidate.parentElement : candidate;
                 const rect = media?.getBoundingClientRect();
                 return {candidate, media, area: rect ? rect.width * rect.height : 0};
-            }).filter(item => item.candidate === target || item.area >= 4096)
+            }).filter(item => boundary || item.candidate === target || item.area >= 4096)
                 .sort((left, right) => right.area - left.area);
 
             for (const {candidate, media} of rankedCandidates) {
@@ -1933,6 +2126,10 @@ module.exports = class GIFboardPlus {
         menu.setAttribute("role", "menu");
         menu.setAttribute("aria-label", this.t("GIF folder actions"));
         menu.append(
+            this.makeButton("Download folder", () => {
+                this.closeContextMenu();
+                this.exportFolder(folder.id);
+            }),
             this.makeButton("Rename", () => {
                 this.closeContextMenu();
                 this.renameFolder(folder.id);
@@ -1943,7 +2140,7 @@ module.exports = class GIFboardPlus {
             })
         );
         menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - 210))}px`;
-        menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - 120))}px`;
+        menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - 160))}px`;
         document.documentElement.append(menu);
         this.contextMenu = menu;
         this.onContextOutside = event => {
@@ -2067,38 +2264,73 @@ module.exports = class GIFboardPlus {
         }
     }
 
+    exportFolder(folderId) {
+        if (this.storageBlocked) {
+            return this.notify("Cannot export unreadable library data. Import a valid backup to recover it first.", "error");
+        }
+        try {
+            const folder = this.state.folders.find(item => item.id === folderId);
+            if (!folder) throw new Error("The selected folder no longer exists.");
+            const backup = {
+                format: "GIFboard-library",
+                version: DATA_VERSION,
+                exportedAt: new Date().toISOString(),
+                folders: [folder]
+            };
+            const safeName = folder.name
+                .replace(/[<>:"\/\\|?*\u0000-\u001f]/g, "-")
+                .replace(/[. ]+$/g, "")
+                .slice(0, 100) || "folder";
+            const blob = new Blob([JSON.stringify(backup, null, 2)], {type: "application/json"});
+            const href = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = href;
+            link.download = `gifboard-${safeName}.json`;
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(href), 1000);
+        }
+        catch (error) {
+            console.error(`[${PLUGIN_NAME}] Folder export failed:`, error);
+            this.notify(this.t("Could not export GIF library: {error}", {error: this.translateError(error.message)}), "error");
+        }
+    }
+
     importLibrary() {
         const input = document.createElement("input");
         input.type = "file";
         input.accept = ".json,application/json";
-        input.addEventListener("change", async () => {
+        input.addEventListener("change", () => {
             const file = input.files?.[0];
             if (!file) return;
-            try {
-                const parsed = JSON.parse(await file.text());
-                if (parsed?.format !== "GIFboard-library" || parsed.version !== DATA_VERSION) {
-                    throw new Error("This file is not a supported GIFboard backup.");
-                }
-                const incoming = normalizeState({version: parsed.version, folders: parsed.folders});
-                const applyImport = () => {
-                    if (!this.mergeImport(incoming)) return;
-                    this.storageBlocked = false;
-                    this.renderLibrary();
-                    this.notify("GIF library imported and merged.");
-                };
-                if (this.storageBlocked) {
-                    this.showConfirmDialog("The current library data cannot be read. Replace it with this backup?", applyImport, "Continue");
-                }
-                else applyImport();
-            }
-            catch (error) {
-                console.error(`[${PLUGIN_NAME}] Import failed:`, error);
-                this.notify(this.t("Import failed; existing library was left unchanged: {error}", {
-                    error: this.translateError(error.message)
-                }), "error");
-            }
+            this.importLibraryFile(file);
         }, {once: true});
         input.click();
+    }
+
+    async importLibraryFile(file) {
+        try {
+            const parsed = JSON.parse(await file.text());
+            if (parsed?.format !== "GIFboard-library" || parsed.version !== DATA_VERSION) {
+                throw new Error("This file is not a supported GIFboard backup.");
+            }
+            const incoming = normalizeState({version: parsed.version, folders: parsed.folders});
+            const applyImport = () => {
+                if (!this.mergeImport(incoming)) return;
+                this.storageBlocked = false;
+                this.renderLibrary();
+                this.notify("GIF library imported and merged.");
+            };
+            if (this.storageBlocked) {
+                this.showConfirmDialog("The current library data cannot be read. Replace it with this backup?", applyImport, "Continue");
+            }
+            else applyImport();
+        }
+        catch (error) {
+            console.error(`[${PLUGIN_NAME}] Import failed:`, error);
+            this.notify(this.t("Import failed; existing library was left unchanged: {error}", {
+                error: this.translateError(error.message)
+            }), "error");
+        }
     }
 
     mergeImport(incoming) {
