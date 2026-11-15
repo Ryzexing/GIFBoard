@@ -1,13 +1,15 @@
 /**
  * @name GIFboard+
  * @author Razik
- * @version 2.2.25
+ * @version 2.2.26
  * @description Organize, search, and send GIFs from your personal library.
  */
 
 const PLUGIN_NAME = "GIFboard+";
-const DEFAULT_SIZE = {width: 480, height: 560, sidebarWidth: 155, opacity: 0.94, hideOnRightClick: true, autoFavorite: false, keepWithinScreen: true, left: null, top: null};
-const SIZE_LIMITS = {minWidth: 320, maxWidth: 4096, minHeight: 240, maxHeight: 2160, minSidebarWidth: 100, maxSidebarWidth: 360};
+const DEFAULT_SIZE = {width: 480, height: 560, sidebarWidth: 155, cardWidth: 140, opacity: 0.94, hideOnRightClick: true, autoFavorite: false, convertImagesToGif: true, keepWithinScreen: true, left: null, top: null};
+const SIZE_LIMITS = {minWidth: 320, maxWidth: 4096, minHeight: 240, maxHeight: 2160, minSidebarWidth: 100, maxSidebarWidth: 360, minCardWidth: 100, maxCardWidth: 480};
+const MAX_IMAGE_CONVERSION_BYTES = 10 * 1024 * 1024;
+const MAX_GIF_DIMENSION = 1024;
 const DATA_VERSION = 1;
 const RU_TRANSLATIONS = {
     "GIF library window layout": "Размеры и оформление окна GIF-библиотеки",
@@ -15,8 +17,11 @@ const RU_TRANSLATIONS = {
     "Height": "Высота",
     "Reset to default": "Сбросить настройки",
     "Window size, sidebar width, background opacity, and right-click behavior are saved automatically.": "Размеры окна и панели, прозрачность и поведение правой кнопки сохраняются автоматически.",
+    "Window size, sidebar width, card zoom, background opacity, and right-click behavior are saved automatically.": "Размеры окна и панели, масштаб карточек, прозрачность и поведение правой кнопки сохраняются автоматически.",
     "Window background opacity": "Прозрачность фона окна",
     "Add to Favorites when saving to a folder": "В избранное при добавлении в папку",
+    "Convert images to GIF when saving to a folder": "Преобразовывать изображения в GIF при добавлении в папку",
+    "When enabled, images are converted and stored locally in the config as Base64, so they remain available if the original is deleted from chat. When disabled, only a link is saved, and the image may become unavailable if the original is deleted.": "При включённой настройке изображения преобразуются и сохраняются локально в конфиге в формате Base64, поэтому останутся доступны, даже если оригинал удалить из чата. При выключенной настройке сохраняется только ссылка, и изображение может стать недоступным после удаления оригинала.",
     "Hide on right-click in empty space": "Скрывать правым щелчком по пустой области",
     "Keep within screen bounds": "Придерживаться границ экрана",
     "Personal GIF library": "Личная библиотека GIF",
@@ -27,6 +32,15 @@ const RU_TRANSLATIONS = {
     "Export": "Экспорт",
     "Import": "Импорт",
     "Close": "Закрыть",
+    "By recency": "По новизне",
+    "By rating": "По рейтингу",
+    "By usage": "Частота использования",
+    "Rate GIF": "Оценить GIF",
+    "Set rating to {rating} of 5": "Поставить оценку {rating} из 5",
+    "Right-click for GIF actions": "Щёлкните правой кнопкой для действий с GIF",
+    "GIF card actions": "Действия с GIF",
+    "Sort by {mode}": "Сортировка: {mode}",
+    "Hold Ctrl and scroll to change card size.": "Зажмите Ctrl и прокрутите колёсико, чтобы изменить размер карточек.",
     "GIF folders": "Папки с GIF",
     "Resize folder panel": "Изменить ширину панели папок",
     "Resize GIF library from {direction}": "Изменить размер окна GIF с {direction}",
@@ -47,6 +61,9 @@ const RU_TRANSLATIONS = {
     "This folder is empty. Right-click a GIF in Discord's picker to add it.": "Папка пуста. Щёлкните правой кнопкой по GIF в пикере Discord, чтобы добавить его.",
     "Send {title}": "Отправить: {title}",
     "Send GIF": "Отправить GIF",
+    "Discord's attachment uploader is unavailable. GIF was not sent.": "Загрузчик вложений Discord недоступен. GIF не отправлен.",
+    "The saved GIF data is invalid. No message was sent.": "Данные сохранённого GIF повреждены. Сообщение не отправлено.",
+    "GIF attached to Discord's composer. Click Send to send it.": "GIF добавлен в поле сообщения Discord. Нажмите «Отправить», чтобы отправить его.",
     "Saved GIF": "Сохранённый GIF",
     "Preview unavailable": "Предпросмотр недоступен",
     "GIF": "GIF",
@@ -79,6 +96,11 @@ const RU_TRANSLATIONS = {
     "The selected folder no longer exists.": "Выбранная папка больше не существует.",
     "This GIF is already in that folder.": "Этот GIF уже есть в папке.",
     "GIF added to folder.": "GIF добавлен в папку.",
+    "GIF preview URL refreshed.": "Ссылка предпросмотра GIF обновлена.",
+    "This video cannot be saved here; save a GIF instead.": "Это видео нельзя сохранить; добавьте GIF.",
+    "Image saved as a link because GIF conversion failed. Its preview may expire.": "Изображение сохранено ссылкой: не удалось преобразовать его в GIF, предпросмотр может со временем пропасть.",
+    "Image converted to GIF.": "Изображение преобразовано в GIF.",
+    "Image conversion started.": "Начато преобразование изображения.",
     "GIF was saved to your folder, but Discord's Favorites button or its state could not be identified.": "GIF сохранён в папку, но не удалось определить кнопку избранного Discord или её состояние.",
     "GIF was saved, but Discord did not confirm the Favorites change.": "GIF сохранён, но Discord не подтвердил добавление в избранное.",
     "GIF added to Discord Favorites.": "GIF добавлен в избранное Discord.",
@@ -150,7 +172,13 @@ const STYLE = `
 .gifboard-setting-row{display:flex;align-items:center;gap:7px;margin:6px 0;font-size:12px}
 .gifboard-setting-row input[type=range]{flex:1;min-width:60px}
 .gifboard-setting-row input[type=checkbox]{width:18px;height:18px}
+.gifboard-setting-warning{position:relative;display:inline-grid;place-items:center;width:16px;height:16px;flex:0 0 16px;border-radius:50%;color:#ed4245;font-size:14px;font-weight:700;cursor:help}
+.gifboard-setting-warning:focus-visible{outline:2px solid currentColor;outline-offset:2px}
+.gifboard-setting-warning:hover::after,.gifboard-setting-warning:focus-visible::after{position:absolute;z-index:10;bottom:calc(100% + 6px);left:0;box-sizing:border-box;width:max-content;max-width:260px;padding:8px 10px;border:1px solid var(--background-modifier-accent,rgba(255,255,255,.15));border-radius:5px;background:var(--background-floating,#18191c);box-shadow:0 4px 14px rgba(0,0,0,.35);color:var(--text-normal,#dbdee1);content:attr(data-tooltip);font-size:12px;font-weight:400;line-height:1.4;white-space:normal}
 .gifboard-header button,.gifboard-folder-actions button,.gifboard-card button,.gifboard-context button{border:0;border-radius:4px;padding:6px 9px;background:var(--background-secondary,#232428)}
+.gifboard-sort-controls{display:flex;flex:0 0 100%;justify-content:flex-end;gap:4px}
+.gifboard-sort-controls button{padding:5px 7px;font-size:12px;white-space:nowrap}
+.gifboard-sort-controls button[aria-pressed=true]{background:var(--background-modifier-selected,rgba(255,255,255,.14))}
 .gifboard-search{min-width:100px;flex:1 1 160px;padding:7px 9px;border:0;border-radius:4px;background:var(--input-background,#1e1f22);color:inherit}
 .gifboard-workspace{display:flex;flex:1;min-height:0}
 .gifboard-folders{box-sizing:border-box;width:var(--gifboard-sidebar-width,155px);flex:0 0 var(--gifboard-sidebar-width,155px);overflow:auto;padding:8px;border-right:1px solid var(--background-modifier-accent,rgba(255,255,255,.08))}
@@ -166,7 +194,7 @@ const STYLE = `
 .gifboard-main{display:flex;flex:1;min-width:0;min-height:0;flex-direction:column}
 .gifboard-folder-actions{display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px}
 .gifboard-folder-actions button{flex:1 1 72px}
-.gifboard-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));align-content:start;gap:8px;flex:1;min-width:0;min-height:0;overflow:auto;padding:10px}
+.gifboard-grid{display:grid;grid-template-columns:repeat(auto-fill,var(--gifboard-card-width,140px));align-content:start;gap:8px;flex:1;min-width:0;min-height:0;overflow:auto;padding:10px}
 .gifboard-card{position:relative;min-width:0;overflow:hidden;border-radius:6px;background:var(--background-secondary,#232428)}
 .gifboard-file-size{position:absolute;top:6px;left:6px;z-index:1;max-width:calc(100% - 12px);overflow:hidden;padding:3px 6px;border-radius:4px;background:rgba(0,0,0,.72);color:#fff;font-size:11px;text-overflow:ellipsis;white-space:nowrap;pointer-events:none}
 .gifboard-preview{display:block;width:100%;padding:0;border:0;border-radius:6px 6px 0 0;background:transparent;text-align:left}
@@ -174,11 +202,10 @@ const STYLE = `
 .gifboard-preview:disabled{cursor:wait;opacity:.65}
 .gifboard-card img,.gifboard-card video{display:block;width:100%;height:auto;aspect-ratio:4/3;object-fit:cover;background:var(--background-tertiary,#1e1f22)}
 .gifboard-card-label{overflow:hidden;padding:5px 7px;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
-.gifboard-card-actions{display:flex;gap:4px;padding:0 6px 6px}
-.gifboard-card-actions button{flex:1;padding:5px 2px;font-size:12px}
 .gifboard-empty{padding:18px;color:var(--text-muted,#949ba4)}
 .gifboard-context{position:fixed;z-index:2147483647;display:grid;gap:4px;min-width:190px;padding:8px;border:1px solid var(--background-modifier-accent,rgba(255,255,255,.12));border-radius:6px;background:var(--background-floating,#18191c);box-shadow:0 8px 24px rgba(0,0,0,.35)}
 .gifboard-context button{text-align:left}
+.gifboard-context button[aria-pressed=true]{background:var(--background-modifier-selected,rgba(255,255,255,.14))}
 .gifboard-context-submenu{position:relative}
 .gifboard-context-submenu-trigger{display:flex;align-items:center;justify-content:space-between;gap:16px;width:100%}
 .gifboard-context-submenu-trigger::after{content:"›";font-size:18px;line-height:1}
@@ -194,7 +221,7 @@ const STYLE = `
 .gifboard-dialog-actions button{border:0;border-radius:4px;padding:8px 12px;background:var(--background-secondary,#232428)}
 .gifboard-dialog-actions button[data-primary=true]{background:var(--brand-500,#5865f2)}
 .gifboard-tools button:focus-visible,.gifboard-tools input:focus-visible{outline:2px solid var(--brand-500,#5865f2);outline-offset:2px}
-@media(max-width:520px){.gifboard-header{gap:5px;padding:7px}.gifboard-header button{padding:5px 7px}.gifboard-folders{padding:5px}.gifboard-grid{grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:5px;padding:6px}}
+@media(max-width:520px){.gifboard-header{gap:5px;padding:7px}.gifboard-header button{padding:5px 7px}.gifboard-folders{padding:5px}.gifboard-grid{gap:5px;padding:6px}}
 `;
 
 function clamp(value, min, max) {
@@ -257,6 +284,14 @@ function preferredGifUrl(value) {
     return url.href;
 }
 
+function preferredPreviewUrl(value) {
+    const safe = safePreviewUrl(value);
+    if (!safe) return null;
+    return new URL(safe).hostname.toLowerCase() === "media.tenor.com"
+        ? preferredGifUrl(safe) || safe
+        : safe;
+}
+
 function safeLocalGifDataUrl(value) {
     if (typeof value !== "string" || !/^data:image\/gif;base64,/i.test(value)) return null;
     const payload = value.slice(value.indexOf(",") + 1);
@@ -281,6 +316,107 @@ function formatBytes(bytes) {
     return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unit]}`;
 }
 
+function encodeGifFrame(width, height, rgba) {
+    const indices = new Uint8Array(width * height);
+    for (let pixel = 0, offset = 0; pixel < indices.length; pixel++, offset += 4) {
+        if (rgba[offset + 3] < 128) {
+            indices[pixel] = 0;
+            continue;
+        }
+        const color = (rgba[offset] >> 5) << 5 |
+            (rgba[offset + 1] >> 5) << 2 |
+            (rgba[offset + 2] >> 6);
+        indices[pixel] = Math.min(255, color + 1);
+    }
+
+    const compressed = [];
+    let bitBuffer = 0;
+    let bitCount = 0;
+    let codeSize = 9;
+    let nextCode = 258;
+    const dictionary = new Map();
+    const writeCode = code => {
+        bitBuffer |= code << bitCount;
+        bitCount += codeSize;
+        while (bitCount >= 8) {
+            compressed.push(bitBuffer & 255);
+            bitBuffer >>>= 8;
+            bitCount -= 8;
+        }
+    };
+
+    writeCode(256);
+    let prefix = indices[0];
+    for (let index = 1; index < indices.length; index++) {
+        const symbol = indices[index];
+        const key = prefix * 256 + symbol;
+        const existing = dictionary.get(key);
+        if (existing !== undefined) {
+            prefix = existing;
+            continue;
+        }
+        writeCode(prefix);
+        if (nextCode < 4096) {
+            dictionary.set(key, nextCode++);
+            if (nextCode > (1 << codeSize) && codeSize < 12) codeSize++;
+        }
+        else {
+            writeCode(256);
+            dictionary.clear();
+            codeSize = 9;
+            nextCode = 258;
+        }
+        prefix = symbol;
+    }
+    writeCode(prefix);
+    writeCode(257);
+    if (bitCount) compressed.push(bitBuffer & 255);
+
+    const bytes = [];
+    const writeByte = value => bytes.push(value & 255);
+    const writeWord = value => {
+        writeByte(value);
+        writeByte(value >> 8);
+    };
+    for (const character of "GIF89a") writeByte(character.charCodeAt(0));
+    writeWord(width);
+    writeWord(height);
+    writeByte(0xF7);
+    writeByte(0);
+    writeByte(0);
+    writeByte(0);
+    writeByte(0);
+    writeByte(0);
+    for (let index = 1; index < 256; index++) {
+        const color = index - 1;
+        writeByte(Math.round(((color >> 5) & 7) * 255 / 7));
+        writeByte(Math.round(((color >> 2) & 7) * 255 / 7));
+        writeByte(Math.round((color & 3) * 255 / 3));
+    }
+    writeByte(0x21);
+    writeByte(0xF9);
+    writeByte(4);
+    writeByte(1);
+    writeWord(0);
+    writeByte(0);
+    writeByte(0);
+    writeByte(0x2C);
+    writeWord(0);
+    writeWord(0);
+    writeWord(width);
+    writeWord(height);
+    writeByte(0);
+    writeByte(8);
+    for (let offset = 0; offset < compressed.length; offset += 255) {
+        const size = Math.min(255, compressed.length - offset);
+        writeByte(size);
+        for (let index = 0; index < size; index++) writeByte(compressed[offset + index]);
+    }
+    writeByte(0);
+    writeByte(0x3B);
+    return Uint8Array.from(bytes);
+}
+
 function cleanGifTitle(value) {
     if (typeof value !== "string") return "";
     const title = value.trim().slice(0, 256);
@@ -297,7 +433,13 @@ function cleanGifTitle(value) {
 }
 
 function gifKey(gif) {
-    return gif.url ? gif.url.trim().toLowerCase() : `local:${gif.id}`;
+    if (!gif.url) return `local:${gif.id}`;
+    const url = normalizeEncodedUrl(gif.url);
+    if (url && /^(?:media\.discordapp\.net|cdn\.discordapp\.com)$/i.test(url.hostname) &&
+        /^\/attachments\/\d+\/\d+\//i.test(url.pathname)) {
+        return `discord-attachment:${url.pathname.toLowerCase()}`;
+    }
+    return gif.url.trim().toLowerCase();
 }
 
 function normalizeState(value) {
@@ -328,9 +470,11 @@ function normalizeState(value) {
                         ? item.sizeBytes
                         : Math.floor(dataUrl.slice(dataUrl.indexOf(",") + 1).length * 3 / 4))
                     : null,
-                previewUrl: preferredGifUrl(item.previewUrl) || url || null,
+                previewUrl: preferredPreviewUrl(item.previewUrl) || dataUrl || preferredPreviewUrl(url) || url || null,
                 title: cleanGifTitle(item.title),
-                addedAt: Number.isFinite(item.addedAt) ? item.addedAt : Date.now()
+                addedAt: Number.isFinite(item.addedAt) ? item.addedAt : Date.now(),
+                rating: Number.isInteger(item.rating) && item.rating >= 0 && item.rating <= 5 ? item.rating : 0,
+                usageCount: Number.isSafeInteger(item.usageCount) && item.usageCount >= 0 ? item.usageCount : 0
             });
         }
         return {id: folder.id, name: folder.name.trim().slice(0, 80) || "Untitled", gifs};
@@ -366,6 +510,9 @@ module.exports = class GIFboardPlus {
         this.settingsTimer = null;
         this.selectedFolder = null;
         this.searchTerm = "";
+        this.sortMode = "recent";
+        this.sortDescending = true;
+        this.sortButtons = {};
         this.sendingGifs = new Set();
         this.resizeStart = null;
         this.sidebarResizeStart = null;
@@ -425,6 +572,7 @@ module.exports = class GIFboardPlus {
         this.overlay?.removeEventListener("dragover", this.onLibraryDragOver, true);
         this.overlay?.removeEventListener("dragleave", this.onLibraryDragLeave, true);
         this.overlay?.removeEventListener("drop", this.onLibraryDrop, true);
+        this.overlay?.removeEventListener("wheel", this.onLibraryWheel);
         this.toggle?.remove();
         this.toolbar?.remove();
         this.overlay?.remove();
@@ -443,6 +591,7 @@ module.exports = class GIFboardPlus {
             this.settings.width = clamp(storedSettings.width, SIZE_LIMITS.minWidth, SIZE_LIMITS.maxWidth);
             this.settings.height = clamp(storedSettings.height, SIZE_LIMITS.minHeight, SIZE_LIMITS.maxHeight);
             this.settings.sidebarWidth = clamp(storedSettings.sidebarWidth ?? DEFAULT_SIZE.sidebarWidth, SIZE_LIMITS.minSidebarWidth, SIZE_LIMITS.maxSidebarWidth);
+            this.settings.cardWidth = clamp(storedSettings.cardWidth ?? DEFAULT_SIZE.cardWidth, SIZE_LIMITS.minCardWidth, SIZE_LIMITS.maxCardWidth);
             const opacity = Number(storedSettings.opacity);
             this.settings.opacity = Number.isFinite(opacity) ? Math.min(1, Math.max(0.25, opacity)) : DEFAULT_SIZE.opacity;
             this.settings.hideOnRightClick = typeof storedSettings.hideOnRightClick === "boolean"
@@ -451,6 +600,9 @@ module.exports = class GIFboardPlus {
             this.settings.autoFavorite = typeof storedSettings.autoFavorite === "boolean"
                 ? storedSettings.autoFavorite
                 : DEFAULT_SIZE.autoFavorite;
+            this.settings.convertImagesToGif = typeof storedSettings.convertImagesToGif === "boolean"
+                ? storedSettings.convertImagesToGif
+                : DEFAULT_SIZE.convertImagesToGif;
             this.settings.keepWithinScreen = typeof storedSettings.keepWithinScreen === "boolean"
                 ? storedSettings.keepWithinScreen
                 : DEFAULT_SIZE.keepWithinScreen;
@@ -538,6 +690,7 @@ module.exports = class GIFboardPlus {
         panel.append(this.createOpacityControl());
         panel.append(this.createHideOnRightClickControl());
         panel.append(this.createAutoFavoriteControl());
+        panel.append(this.createConvertImagesControl());
         panel.append(this.createKeepWithinScreenControl());
         panel.append(this.makeButton("Reset to default", () => {
             this.settings = {...DEFAULT_SIZE};
@@ -553,6 +706,8 @@ module.exports = class GIFboardPlus {
             if (hideOnRightClick) hideOnRightClick.checked = this.settings.hideOnRightClick;
             const autoFavorite = panel.querySelector("[data-setting='autoFavorite']");
             if (autoFavorite) autoFavorite.checked = this.settings.autoFavorite;
+            const convertImagesToGif = panel.querySelector("[data-setting='convertImagesToGif']");
+            if (convertImagesToGif) convertImagesToGif.checked = this.settings.convertImagesToGif;
             const keepWithinScreen = panel.querySelector("[data-setting='keepWithinScreen']");
             if (keepWithinScreen) keepWithinScreen.checked = this.settings.keepWithinScreen;
             this.geometry = null;
@@ -560,10 +715,11 @@ module.exports = class GIFboardPlus {
             this.applyLibrarySize();
             this.applyLibraryOpacity();
             this.applySidebarWidth();
+            this.applyCardWidth();
             this.saveSettings();
         }));
         const note = document.createElement("p");
-        note.textContent = this.t("Window size, sidebar width, background opacity, and right-click behavior are saved automatically.");
+        note.textContent = this.t("Window size, sidebar width, card zoom, background opacity, and right-click behavior are saved automatically.");
         note.style.color = "var(--text-muted,#949ba4)";
         panel.append(note);
         return panel;
@@ -608,6 +764,32 @@ module.exports = class GIFboardPlus {
         const caption = document.createElement("span");
         caption.textContent = this.t("Add to Favorites when saving to a folder");
         row.append(checkbox, caption);
+        return row;
+    }
+
+    createConvertImagesControl() {
+        const row = document.createElement("div");
+        row.className = "gifboard-setting-row";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.id = `${PLUGIN_NAME}-convert-images-${createGifId()}`;
+        checkbox.checked = this.settings.convertImagesToGif;
+        checkbox.dataset.setting = "convertImagesToGif";
+        checkbox.addEventListener("change", () => {
+            this.settings.convertImagesToGif = checkbox.checked;
+            this.scheduleSaveSettings();
+        });
+        const caption = document.createElement("label");
+        caption.htmlFor = checkbox.id;
+        caption.textContent = this.t("Convert images to GIF when saving to a folder");
+        const warning = document.createElement("span");
+        warning.className = "gifboard-setting-warning";
+        warning.textContent = "!";
+        warning.tabIndex = 0;
+        warning.setAttribute("role", "img");
+        warning.setAttribute("aria-label", this.t("When enabled, images are converted and stored locally in the config as Base64, so they remain available if the original is deleted from chat. When disabled, only a link is saved, and the image may become unavailable if the original is deleted."));
+        warning.dataset.tooltip = this.t("When enabled, images are converted and stored locally in the config as Base64, so they remain available if the original is deleted from chat. When disabled, only a link is saved, and the image may become unavailable if the original is deleted.");
+        row.append(checkbox, caption, warning);
         return row;
     }
 
@@ -785,6 +967,7 @@ module.exports = class GIFboardPlus {
             this.overlay.addEventListener("dragover", this.onLibraryDragOver, true);
             this.overlay.addEventListener("dragleave", this.onLibraryDragLeave, true);
             this.overlay.addEventListener("drop", this.onLibraryDrop, true);
+            this.overlay.addEventListener("wheel", this.onLibraryWheel, {passive: false});
             this.libraryBackdrop.append(this.overlay);
             document.documentElement.append(this.libraryBackdrop);
             this.renderLibrary();
@@ -882,6 +1065,23 @@ module.exports = class GIFboardPlus {
         this.overlay?.style.setProperty("--gifboard-opacity", String(this.settings.opacity));
     }
 
+    applyCardWidth() {
+        this.overlay?.style.setProperty("--gifboard-card-width", `${this.settings.cardWidth}px`);
+    }
+
+    onLibraryWheel = event => {
+        if (!event.ctrlKey || !event.deltaY) return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.settings.cardWidth = clamp(
+            this.settings.cardWidth + (event.deltaY < 0 ? 20 : -20),
+            SIZE_LIMITS.minCardWidth,
+            SIZE_LIMITS.maxCardWidth
+        );
+        this.applyCardWidth();
+        this.scheduleSaveSettings();
+    };
+
     onLibraryContextMenu = event => {
         const target = event.target instanceof Element ? event.target : null;
         const card = target?.closest(".gifboard-card");
@@ -891,7 +1091,7 @@ module.exports = class GIFboardPlus {
             if (!gif) return;
             event.preventDefault();
             event.stopPropagation();
-            this.showContextMenu(event.clientX, event.clientY, gif);
+            this.showContextMenu(event.clientX, event.clientY, gif, false, folder.id);
             return;
         }
         if (target?.closest("button,input,textarea,select,a,[role='button'],.gifboard-folder-actions,.gifboard-settings")) return;
@@ -1276,6 +1476,7 @@ module.exports = class GIFboardPlus {
         if (!this.overlay) return;
         this.applySidebarWidth();
         this.applyLibraryOpacity();
+        this.applyCardWidth();
         this.overlay.replaceChildren();
 
         const header = document.createElement("div");
@@ -1307,17 +1508,35 @@ module.exports = class GIFboardPlus {
             this.createOpacityControl(),
             this.createHideOnRightClickControl(),
             this.createAutoFavoriteControl(),
+            this.createConvertImagesControl(),
             this.createKeepWithinScreenControl()
         );
         const exportButton = this.makeButton("Export", () => this.exportLibrary());
         exportButton.title = this.t("Download a JSON backup of your folders and saved GIFs.");
         const importButton = this.makeButton("Import", () => this.importLibrary());
         importButton.title = this.t("Merge a GIFboard JSON backup into this library; duplicates are skipped.");
+        const sortControls = document.createElement("div");
+        sortControls.className = "gifboard-sort-controls";
+        this.sortButtons = {};
+        const sortOptions = [
+            ["recent", "By recency"],
+            ["rating", "By rating"],
+            ["usage", "By usage"]
+        ];
+        for (const [mode, label] of sortOptions) {
+            const button = this.makeButton(label, () => this.setSortMode(mode));
+            button.dataset.sortMode = mode;
+            button.title = this.t("Sort by {mode}", {mode: this.t(label)});
+            this.sortButtons[mode] = button;
+            sortControls.append(button);
+        }
+        this.updateSortControls();
         header.append(title, search,
             exportButton,
             importButton,
             settingsButton,
-            this.makeButton("Close", () => this.toggleLibrary()));
+            this.makeButton("Close", () => this.toggleLibrary()),
+            sortControls);
 
         const workspace = document.createElement("div");
         workspace.className = "gifboard-workspace";
@@ -1378,9 +1597,11 @@ module.exports = class GIFboardPlus {
         const grid = document.createElement("div");
         grid.className = "gifboard-grid";
         grid.dataset.grid = "true";
+        grid.title = this.t("Hold Ctrl and scroll to change card size.");
         main.append(grid);
         workspace.append(sidebar, sidebarResizer, main);
         this.overlay.append(header, workspace, settingsPanel);
+        settingsPanel.style.top = `${header.offsetHeight + 4}px`;
         for (const direction of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
             const resizeHandle = this.makeButton("", () => {}, "gifboard-resize-handle");
             resizeHandle.dataset.resize = direction;
@@ -1410,6 +1631,29 @@ module.exports = class GIFboardPlus {
         this.renderGrid();
     }
 
+    setSortMode(mode) {
+        if (this.sortMode === mode) this.sortDescending = !this.sortDescending;
+        else {
+            this.sortMode = mode;
+            this.sortDescending = true;
+        }
+        this.updateSortControls();
+        this.renderGrid();
+    }
+
+    updateSortControls() {
+        for (const [mode, button] of Object.entries(this.sortButtons)) {
+            const label = this.t({
+                recent: "By recency",
+                rating: "By rating",
+                usage: "By usage"
+            }[mode]);
+            const active = mode === this.sortMode;
+            button.textContent = `${label}${active ? (this.sortDescending ? " ↓" : " ↑") : ""}`;
+            button.setAttribute("aria-pressed", String(active));
+        }
+    }
+
     renderGrid() {
         const grid = this.overlay?.querySelector("[data-grid]");
         if (!grid) return;
@@ -1435,6 +1679,13 @@ module.exports = class GIFboardPlus {
             grid.append(empty);
             return;
         }
+        const sortField = this.sortMode === "rating"
+            ? "rating"
+            : this.sortMode === "usage"
+                ? "usageCount"
+                : "addedAt";
+        gifs.sort((left, right) => right[sortField] - left[sortField]);
+        if (!this.sortDescending) gifs.reverse();
         gifs.forEach(gif => grid.append(this.createGifCard(folder, gif)));
     }
 
@@ -1443,45 +1694,48 @@ module.exports = class GIFboardPlus {
         card.className = "gifboard-card";
         card.dataset.folderId = folder.id;
         card.dataset.gifKey = gifKey(gif);
+        card.tabIndex = 0;
+        card.title = this.t("Right-click for GIF actions");
+        card.setAttribute("aria-label", `${this.t("GIF card actions")}: ${gif.title || gif.filename || this.t("GIF")}`);
         const preview = document.createElement("button");
         preview.type = "button";
         preview.className = "gifboard-preview";
         preview.setAttribute("aria-label", this.t("Send {title}", {title: gif.title || gif.filename || this.t("GIF")}));
-        preview.title = gif.dataUrl
-            ? this.t("Local GIFs can be previewed, but sending them from the library is not available yet.")
-            : this.t("Send GIF");
-        preview.addEventListener("click", () => this.sendGif(gif, preview));
+        preview.title = this.t("Send GIF");
+        preview.addEventListener("click", () => this.sendGif(gif, preview, folder.id));
         const previewUrl = gif.previewUrl || gif.dataUrl || gif.url;
-        const isVideo = /\.(?:mp4|webm|mov)(?:$|[?#])/i.test(previewUrl);
-        const media = document.createElement(isVideo ? "video" : "img");
-        media.src = previewUrl;
-        if (isVideo) {
-            media.muted = true;
-            media.loop = true;
-            media.autoplay = true;
-            media.playsInline = true;
-            media.preload = "metadata";
-            media.setAttribute("aria-label", gif.title || this.t("Saved GIF"));
-        }
-        else {
-            media.alt = gif.title || this.t("Saved GIF");
-            media.loading = "lazy";
-        }
-        let triedFallback = false;
-        media.addEventListener("error", () => {
-            const fallback = safeUrl(gif.url);
-            if (!triedFallback && fallback && fallback !== media.src) {
-                triedFallback = true;
-                media.src = fallback;
-                if (isVideo) media.load();
-                return;
+        const mediaUrls = [...new Set([previewUrl, gif.url, gif.dataUrl].filter(Boolean))];
+        const createMedia = (src, index) => {
+            const isVideo = /\.(?:mp4|webm|mov)(?:$|[?#])/i.test(src);
+            const media = document.createElement(isVideo ? "video" : "img");
+            if (isVideo) {
+                media.muted = true;
+                media.loop = true;
+                media.autoplay = true;
+                media.playsInline = true;
+                media.preload = "metadata";
+                media.setAttribute("aria-label", gif.title || this.t("Saved GIF"));
             }
-            media.remove();
-            const unavailable = document.createElement("div");
-            unavailable.className = "gifboard-empty";
-            unavailable.textContent = this.t("Preview unavailable");
-            card.prepend(unavailable);
-        }, {once: true});
+            else {
+                media.alt = gif.title || this.t("Saved GIF");
+                media.loading = "lazy";
+            }
+            media.addEventListener("error", () => {
+                if (index + 1 < mediaUrls.length) {
+                    media.replaceWith(createMedia(mediaUrls[index + 1], index + 1));
+                    return;
+                }
+                media.remove();
+                const unavailable = document.createElement("div");
+                unavailable.className = "gifboard-empty";
+                unavailable.textContent = this.t("Preview unavailable");
+                card.prepend(unavailable);
+            }, {once: true});
+            media.src = src;
+            if (isVideo) media.load();
+            return media;
+        };
+        const media = createMedia(mediaUrls[0], 0);
         const caption = document.createElement("div");
         caption.className = "gifboard-card-label";
         caption.textContent = gif.title || gif.filename || this.t("GIF");
@@ -1492,11 +1746,8 @@ module.exports = class GIFboardPlus {
             fileSize.title = gif.filename || this.t("GIF");
             card.append(fileSize);
         }
-        const actions = document.createElement("div");
-        actions.className = "gifboard-card-actions";
-        actions.append(this.makeButton("Remove", () => this.removeGif(folder.id, gifKey(gif))));
         preview.append(media, caption);
-        card.append(preview, actions);
+        card.append(preview);
         return card;
     }
 
@@ -1717,7 +1968,7 @@ module.exports = class GIFboardPlus {
         const previous = this.state;
         const next = {
             version: DATA_VERSION,
-            folders: previous.folders.map(folder => ({...folder, gifs: [...folder.gifs]}))
+            folders: previous.folders.map(folder => ({...folder, gifs: folder.gifs.map(gif => ({...gif}))}))
         };
         try {
             change(next);
@@ -1740,32 +1991,153 @@ module.exports = class GIFboardPlus {
             this.notify("This GIF has no valid HTTP(S) URL.", "error");
             return false;
         }
+        const isVideo = rawGif.isVideo === true || /\.(?:mp4|webm|mov|m4v|avi|gifv)(?:$|[?#])/i.test(url);
+        const isAllowedGif = rawGif.isGif === true || this.isKnownGifUrl(url) || /\.gif(?:$|[?#])/i.test(url);
+        if (isVideo && !isAllowedGif) {
+            this.notify("This video cannot be saved here; save a GIF instead.", "error");
+            return false;
+        }
+        const shouldConvertImage = this.settings.convertImagesToGif && rawGif.isImage === true && !isAllowedGif;
         const gif = {
             id: createGifId(),
             url,
             dataUrl: null,
             filename: "",
             sizeBytes: null,
-            previewUrl: preferredGifUrl(rawGif.previewUrl) || url,
+            previewUrl: preferredPreviewUrl(rawGif.previewUrl) || preferredPreviewUrl(rawUrl) || url,
             title: cleanGifTitle(rawGif.title || ""),
             addedAt: Date.now()
         };
+        const key = gifKey(gif);
+        let refreshed = false;
+        let added = false;
+        let conversionRequested = false;
         const success = this.mutateLibrary(state => {
             const folder = state.folders.find(item => item.id === folderId);
             if (!folder) throw new Error("The selected folder no longer exists.");
-            if (folder.gifs.some(item => gifKey(item) === gifKey(gif))) {
-                throw new Error("This GIF is already in that folder.");
+            const existing = folder.gifs.find(item => gifKey(item) === key);
+            if (existing) {
+                if (existing.url === gif.url && existing.previewUrl === gif.previewUrl) {
+                    if (shouldConvertImage && !existing.dataUrl) {
+                        conversionRequested = true;
+                        return;
+                    }
+                    throw new Error("This GIF is already in that folder.");
+                }
+                existing.url = gif.url;
+                existing.previewUrl = existing.dataUrl || gif.previewUrl;
+                existing.title = gif.title || existing.title;
+                refreshed = true;
+                conversionRequested = shouldConvertImage && !existing.dataUrl;
+                return;
             }
             folder.gifs.push(gif);
+            added = true;
+            conversionRequested = shouldConvertImage;
         });
         if (success) {
-            if (this.settings.autoFavorite && rawGif.favoriteControl) this.addToDiscordFavorites(rawGif);
+            if (added && this.settings.autoFavorite && !shouldConvertImage) this.addToDiscordFavorites(rawGif);
             this.selectedFolder = folderId;
             this.toggleLibrary(true);
-            this.notify("GIF added to folder.");
+            if (conversionRequested) {
+                this.notify(added ? "GIF added to folder." : "Image conversion started.");
+                this.convertSavedImageToGif(folderId, key, gif.previewUrl);
+            }
+            else {
+                this.notify(refreshed ? "GIF preview URL refreshed." : "GIF added to folder.");
+            }
             return true;
         }
         return false;
+    }
+
+    async convertSavedImageToGif(folderId, key, sourceUrl) {
+        try {
+            const response = await fetch(sourceUrl);
+            if (!response.ok) throw new Error(`Image download returned HTTP ${response.status}.`);
+            const contentLength = Number(response.headers.get("content-length"));
+            if (Number.isFinite(contentLength) && contentLength > MAX_IMAGE_CONVERSION_BYTES) {
+                throw new Error("Image exceeds the 10 MiB conversion limit.");
+            }
+            let blob;
+            if (response.body?.getReader) {
+                const reader = response.body.getReader();
+                const chunks = [];
+                let totalBytes = 0;
+                try {
+                    while (true) {
+                        const {done, value} = await reader.read();
+                        if (done) break;
+                        totalBytes += value.byteLength;
+                        if (totalBytes > MAX_IMAGE_CONVERSION_BYTES) {
+                            await reader.cancel();
+                            throw new Error("Image exceeds the 10 MiB conversion limit.");
+                        }
+                        chunks.push(value);
+                    }
+                }
+                finally {
+                    reader.releaseLock();
+                }
+                blob = new Blob(chunks, {type: response.headers.get("content-type") || ""});
+            }
+            else {
+                blob = await response.blob();
+            }
+            if (blob.size > MAX_IMAGE_CONVERSION_BYTES) throw new Error("Image exceeds the 10 MiB conversion limit.");
+
+            const objectUrl = URL.createObjectURL(blob);
+            let image;
+            try {
+                image = new Image();
+                await new Promise((resolve, reject) => {
+                    image.onload = resolve;
+                    image.onerror = () => reject(new Error("The downloaded file is not a supported image."));
+                    image.src = objectUrl;
+                });
+            }
+            finally {
+                URL.revokeObjectURL(objectUrl);
+            }
+
+            const width = image.naturalWidth;
+            const height = image.naturalHeight;
+            if (!width || !height) throw new Error("The downloaded image has no dimensions.");
+            const scale = Math.min(1, MAX_GIF_DIMENSION / Math.max(width, height));
+            const outputWidth = Math.max(1, Math.round(width * scale));
+            const outputHeight = Math.max(1, Math.round(height * scale));
+            const canvas = document.createElement("canvas");
+            canvas.width = outputWidth;
+            canvas.height = outputHeight;
+            const context = canvas.getContext("2d", {willReadFrequently: true});
+            if (!context) throw new Error("Could not create an image conversion canvas.");
+            context.drawImage(image, 0, 0, outputWidth, outputHeight);
+            const pixels = context.getImageData(0, 0, outputWidth, outputHeight).data;
+            const bytes = encodeGifFrame(outputWidth, outputHeight, pixels);
+            let binary = "";
+            for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+                binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+            }
+            const dataUrl = `data:image/gif;base64,${btoa(binary)}`;
+            let updated = false;
+            const success = this.mutateLibrary(state => {
+                const folder = state.folders.find(item => item.id === folderId);
+                const gif = folder?.gifs.find(item => gifKey(item) === key);
+                if (!gif || gif.dataUrl) return;
+                gif.dataUrl = dataUrl;
+                gif.previewUrl = dataUrl;
+                gif.sizeBytes = bytes.length;
+                updated = true;
+            });
+            if (!success) throw new Error("The converted GIF could not be saved to the library.");
+            if (!updated) return;
+            if (this.libraryBackdrop && !this.libraryBackdrop.hidden) this.renderGrid();
+            this.notify("Image converted to GIF.");
+        }
+        catch (error) {
+            console.error(`[${PLUGIN_NAME}] Could not convert saved image to GIF:`, error);
+            this.notify("Image saved as a link because GIF conversion failed. Its preview may expire.", "error");
+        }
     }
 
     addToDiscordFavorites(gif) {
@@ -1778,17 +2150,15 @@ module.exports = class GIFboardPlus {
         try {
             control.click();
             window.setTimeout(() => {
-                if (!control.isConnected) {
+                let currentControl = gif.favoriteTarget?.isConnected
+                    ? this.findFavoriteControl(gif.favoriteTarget, null)?.element || null
+                    : null;
+                if (!currentControl && control.isConnected) currentControl = control;
+                if (!currentControl) {
                     this.notify("GIF was saved, but Discord did not confirm the Favorites change.", "error");
                     return;
                 }
-                const label = [
-                    control.getAttribute("aria-label"),
-                    control.getAttribute("title"),
-                    control.getAttribute("data-tooltip-content"),
-                    control.innerText
-                ].filter(Boolean).join(" ");
-                if (/remove|удалить|убрать|избранное|unfavorite/i.test(label) || control.getAttribute("aria-pressed") === "true") {
+                if (this.getFavoriteControlState(currentControl) === true) {
                     this.notify("GIF added to Discord Favorites.");
                 }
                 else {
@@ -1812,6 +2182,28 @@ module.exports = class GIFboardPlus {
         });
     }
 
+    setGifRating(folderId, key, rating) {
+        if (!Number.isInteger(rating) || rating < 1 || rating > 5) return;
+        const success = this.mutateLibrary(state => {
+            const folder = state.folders.find(item => item.id === folderId);
+            const gif = folder?.gifs.find(item => gifKey(item) === key);
+            if (!gif) throw new Error("The selected GIF no longer exists.");
+            gif.rating = rating;
+        });
+        if (success) this.renderGrid();
+    }
+
+    incrementGifUsage(folderId, key) {
+        const folder = this.state.folders.find(item => item.id === folderId);
+        if (!folder?.gifs.some(item => gifKey(item) === key)) return;
+        const success = this.mutateLibrary(state => {
+            const targetFolder = state.folders.find(item => item.id === folderId);
+            const gif = targetFolder?.gifs.find(item => gifKey(item) === key);
+            if (gif) gif.usageCount = Math.min(Number.MAX_SAFE_INTEGER, gif.usageCount + 1);
+        });
+        if (success && this.libraryBackdrop && !this.libraryBackdrop.hidden) this.renderGrid();
+    }
+
     patchMessageContextMenu = (returnValue, props) => {
         const mediaItem = props?.mediaItem;
         const target = props?.target;
@@ -1832,37 +2224,46 @@ module.exports = class GIFboardPlus {
         const url = preferredGifUrl(rawUrl);
         const contentType = mediaItem?.contentType || mediaItem?.content_type || "";
         const originalContentType = mediaItem?.originalContentType || mediaItem?.original_content_type || "";
+        const isVideoMedia = /^video\//i.test(contentType) ||
+            /^video\//i.test(originalContentType) ||
+            /\.(?:mp4|webm|mov|m4v|avi|gifv)(?:$|[?#])/i.test(url || "") ||
+            /^(?:VIDEO)$/i.test(targetMedia?.tagName || target?.tagName || "");
         const isGifMedia = /^image\/gif$/i.test(contentType) ||
             /^image\/gif$/i.test(originalContentType) ||
             this.isKnownGifUrl(url) ||
             /\.gif(?:$|[?#])/i.test(url || "");
         const isImageMedia = /^image\//i.test(contentType) ||
             /^image\//i.test(originalContentType) ||
-            /^video\//i.test(contentType) ||
-            /^video\//i.test(originalContentType) ||
-            /^(?:IMG|VIDEO)$/i.test(targetMedia?.tagName || target?.tagName || "") ||
+            /^(?:IMG)$/i.test(targetMedia?.tagName || target?.tagName || "") ||
             isGifMedia;
-        if (!url || (!isGifMedia && !isImageMedia)) return returnValue;
+        if (!url || (isVideoMedia && !isGifMedia) || (!isGifMedia && !isImageMedia)) return returnValue;
         const menuLocation = this.findContextMenuItems(returnValue);
         if (!menuLocation || this.hasContextMenuItem(returnValue, "gifboard-add-to-folder")) return returnValue;
 
+        const favorite = targetMedia ? this.findFavoriteControl(targetMedia, null) : null;
         const gif = {
             url,
-            previewUrl: preferredGifUrl(previewRawUrl) || url,
+            previewUrl: preferredPreviewUrl(previewRawUrl) || preferredPreviewUrl(rawUrl) || url,
             title: cleanGifTitle(mediaItem?.filename || mediaItem?.name || mediaItem?.alt ||
                 targetMedia?.alt || target?.alt || ""),
-            favoriteControl: null,
-            isFavorite: null
+            favoriteControl: favorite?.element || null,
+            isFavorite: favorite?.isFavorite ?? null,
+            favoriteTarget: targetMedia,
+            isVideo: isVideoMedia,
+            isGif: isGifMedia,
+            isImage: !isVideoMedia && !isGifMedia && isImageMedia
         };
         const items = this.state.folders.length
             ? this.state.folders.map(folder => {
-                const exists = folder.gifs.some(item => gifKey(item) === gifKey(gif));
+                const existing = folder.gifs.find(item => gifKey(item) === gifKey(gif));
+                const exists = Boolean(existing);
+                const refreshable = exists && (existing.url !== gif.url || existing.previewUrl !== gif.previewUrl);
                 return {
                     id: `gifboard-folder-${folder.id}`,
-                    label: `${exists ? "✓ " : ""}${folder.name}`,
-                    disabled: exists,
+                    label: `${refreshable ? "↻ " : exists ? "✓ " : ""}${folder.name}`,
+                    disabled: exists && !refreshable,
                     action: () => {
-                        if (!exists) this.addGifToFolder(folder.id, gif);
+                        if (!exists || refreshable) this.addGifToFolder(folder.id, gif);
                     }
                 };
             })
@@ -1966,7 +2367,11 @@ module.exports = class GIFboardPlus {
             if (anchor) candidates.push(anchor);
 
             const rankedCandidates = candidates.map(candidate => {
-                const media = candidate.matches("source") ? candidate.parentElement : candidate;
+                const media = candidate.matches("source")
+                    ? candidate.parentElement
+                    : candidate.matches("a")
+                        ? candidate.querySelector("img,video")
+                        : candidate;
                 const rect = media?.getBoundingClientRect();
                 return {candidate, media, area: rect ? rect.width * rect.height : 0};
             }).filter(item => boundary || item.candidate === target || item.area >= 4096)
@@ -1984,12 +2389,26 @@ module.exports = class GIFboardPlus {
                     candidate.poster || "";
                 const url = preferredGifUrl(rawUrl);
                 if (!url) continue;
-                const previewUrl = preferredGifUrl(poster) || preferredGifUrl(rawUrl) ||
-                    preferredGifUrl(media?.currentSrc || media?.src || media?.poster) || url;
+                const previewUrl = preferredPreviewUrl(poster) || preferredPreviewUrl(rawUrl) ||
+                    preferredPreviewUrl(media?.currentSrc || media?.src || media?.poster) || url;
                 const title = this.getGifTitle(media);
                 const favorite = this.findFavoriteControl(media, boundary);
+                const isVideo = media?.tagName === "VIDEO" ||
+                    /\.(?:mp4|webm|mov|m4v|avi|gifv)(?:$|[?#])/i.test(url);
+                const isGif = this.isKnownGifUrl(url) || /\.gif(?:$|[?#])/i.test(url);
+                if (isVideo && !isGif) continue;
                 if (!boundary && !this.isKnownGifUrl(url)) continue;
-                return {url, previewUrl, title, favoriteControl: favorite?.element || null, isFavorite: favorite?.isFavorite ?? null};
+                return {
+                    url,
+                    previewUrl,
+                    title,
+                    favoriteControl: favorite?.element || null,
+                    isFavorite: favorite?.isFavorite ?? null,
+                    favoriteTarget: media,
+                    isVideo,
+                    isGif,
+                    isImage: media?.tagName === "IMG" && !isGif
+                };
             }
 
             const background = getComputedStyle(element).backgroundImage;
@@ -2000,7 +2419,18 @@ module.exports = class GIFboardPlus {
                 if (!boundary && !this.isKnownGifUrl(url)) continue;
                 const title = this.getGifTitle(element);
                 const favorite = this.findFavoriteControl(element, boundary);
-                return {url, previewUrl: url, title, favoriteControl: favorite?.element || null, isFavorite: favorite?.isFavorite ?? null};
+                const isGif = this.isKnownGifUrl(url) || /\.gif(?:$|[?#])/i.test(url);
+                return {
+                    url,
+                    previewUrl: url,
+                    title,
+                    favoriteControl: favorite?.element || null,
+                    isFavorite: favorite?.isFavorite ?? null,
+                    favoriteTarget: element,
+                    isVideo: false,
+                    isGif,
+                    isImage: !isGif
+                };
             }
         }
         return null;
@@ -2010,7 +2440,7 @@ module.exports = class GIFboardPlus {
         try {
             const url = new URL(value);
             return /(^|\.)((media\.)?tenor\.com|(media\.)?giphy\.com|klipy\.com)$/i.test(url.hostname) ||
-                /\.gifv?$/i.test(url.pathname);
+                /\.gif$/i.test(url.pathname);
         }
         catch {
             return false;
@@ -2027,8 +2457,6 @@ module.exports = class GIFboardPlus {
 
     findFavoriteControl(media, boundary) {
         const favoriteLabel = /favorite|favourite|избран|звезд|star/i;
-        const removeLabel = /remove|удалить|убрать|unfavorite|remove from favorites|убрать из избранного/i;
-        const addLabel = /add|добавить|в избранное|favorite|favourite/i;
         let current = media;
         for (let depth = 0; current && depth < 8; depth++, current = current.parentElement) {
             const controls = [];
@@ -2042,100 +2470,71 @@ module.exports = class GIFboardPlus {
                     control.innerText
                 ].filter(Boolean).join(" ").trim();
                 if (!favoriteLabel.test(label)) continue;
-                const pressed = control.getAttribute("aria-pressed");
-                if (removeLabel.test(label)) return {element: control, isFavorite: true};
-                if (addLabel.test(label) && !removeLabel.test(label)) {
-                    if (/\badd\b|добавить|в избранное/i.test(label)) return {element: control, isFavorite: false};
-                    if (pressed === "true") return {element: control, isFavorite: true};
-                    if (pressed === "false") return {element: control, isFavorite: false};
-                }
+                const isFavorite = this.getFavoriteControlState(control);
+                if (isFavorite !== null) return {element: control, isFavorite};
             }
             if (current === boundary) break;
         }
         return null;
     }
 
-    showContextMenu(x, y, gif, includeCopyLink = false) {
+    getFavoriteControlState(control) {
+        const label = [
+            control?.getAttribute("aria-label"),
+            control?.getAttribute("title"),
+            control?.getAttribute("data-tooltip-content"),
+            control?.innerText
+        ].filter(Boolean).join(" ").trim();
+        if (/remove|удалить|убрать|unfavorite|убрать из избранного/i.test(label)) return true;
+        if (/add|добавить|в избранное/i.test(label)) return false;
+        for (const value of [
+            control?.getAttribute("aria-pressed"),
+            control?.getAttribute("aria-checked"),
+            control?.getAttribute("data-active")
+        ]) {
+            if (value === "true") return true;
+            if (value === "false") return false;
+        }
+        return null;
+    }
+
+    showContextMenu(x, y, gif, includeCopyLink = false, removeFromFolderId = null) {
         this.closeContextMenu();
         const menu = document.createElement("div");
         menu.className = "gifboard-tools gifboard-context";
         menu.setAttribute("role", "menu");
-        let submenuEntry = null;
-        let submenuPanel = null;
         if (includeCopyLink) {
             menu.setAttribute("aria-label", this.t("GIF actions"));
             menu.append(this.makeButton("Copy link", () => {
                 this.closeContextMenu();
                 this.copyGifLink(gif);
             }));
-            submenuEntry = document.createElement("div");
-            submenuEntry.className = "gifboard-context-submenu";
-            const submenuId = `gifboard-folder-submenu-${Date.now()}`;
-            const trigger = this.makeButton("Save GIF to folder", () => {}, "gifboard-context-submenu-trigger");
-            trigger.setAttribute("aria-haspopup", "menu");
-            trigger.setAttribute("aria-expanded", "false");
-            trigger.setAttribute("aria-controls", submenuId);
-            submenuPanel = document.createElement("div");
-            submenuPanel.id = submenuId;
-            submenuPanel.className = "gifboard-context-submenu-panel";
-            submenuPanel.setAttribute("role", "menu");
-            submenuPanel.setAttribute("aria-label", this.t("GIF folders"));
-            submenuPanel.append(...this.createContextFolderButtons(gif));
-            submenuEntry.append(trigger, submenuPanel);
+        }
+        if (removeFromFolderId !== null) {
+            menu.setAttribute("aria-label", this.t("GIF card actions"));
+            const removeButton = this.makeButton("Remove", () => {
+                this.closeContextMenu();
+                this.removeGif(removeFromFolderId, gifKey(gif));
+            });
+            menu.append(removeButton);
 
-            const openSubmenu = () => {
-                submenuEntry.classList.add("is-open");
-                trigger.setAttribute("aria-expanded", "true");
-                const triggerBounds = trigger.getBoundingClientRect();
-                const entryBounds = submenuEntry.getBoundingClientRect();
-                const panelBounds = submenuPanel.getBoundingClientRect();
-                if (menu.getBoundingClientRect().right + panelBounds.width > window.innerWidth - 8) {
-                    submenuEntry.classList.add("gifboard-context-submenu--left");
-                }
-                else {
-                    submenuEntry.classList.remove("gifboard-context-submenu--left");
-                }
-                const panelHeight = Math.min(submenuPanel.scrollHeight, window.innerHeight - 16);
-                const panelTop = Math.max(8, Math.min(triggerBounds.top, window.innerHeight - panelHeight - 8));
-                submenuPanel.style.top = `${panelTop - entryBounds.top}px`;
-            };
-            const closeSubmenu = () => {
-                submenuEntry.classList.remove("is-open");
-                trigger.setAttribute("aria-expanded", "false");
-            };
-            trigger.addEventListener("mouseenter", openSubmenu);
-            trigger.addEventListener("focus", openSubmenu);
-            trigger.addEventListener("click", event => {
-                event.preventDefault();
-                openSubmenu();
-            });
-            submenuEntry.addEventListener("mouseleave", event => {
-                if (event.relatedTarget instanceof Node && submenuEntry.contains(event.relatedTarget)) return;
-                if (!submenuEntry.contains(document.activeElement)) closeSubmenu();
-            });
-            submenuEntry.addEventListener("focusout", event => {
-                if (event.relatedTarget instanceof Node && submenuEntry.contains(event.relatedTarget)) return;
-                closeSubmenu();
-            });
-            menu.append(submenuEntry);
+            const ratingButtons = [];
+            for (let value = 1; value <= 5; value++) {
+                const button = this.makeButton(`★ ${value}`, () => {
+                    this.closeContextMenu();
+                    this.setGifRating(removeFromFolderId, gifKey(gif), value);
+                }, "", false);
+                button.setAttribute("aria-label", this.t("Set rating to {rating} of 5", {rating: value}));
+                button.setAttribute("aria-pressed", String(gif.rating === value));
+                ratingButtons.push(button);
+            }
+            menu.append(this.createContextSubmenu("Rate GIF", ratingButtons, menu, "Rate GIF"));
         }
-        else {
-            const label = document.createElement("strong");
-            label.textContent = this.t("Save GIF to folder");
-            menu.append(label, ...this.createContextFolderButtons(gif));
-            menu.style.maxHeight = "calc(100vh - 16px)";
-            menu.style.overflowY = "auto";
-        }
+        menu.append(this.createContextSubmenu("Save GIF to folder", this.createContextFolderButtons(gif), menu));
         document.documentElement.append(menu);
         const bounds = menu.getBoundingClientRect();
         menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - bounds.width - 8))}px`;
         menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - bounds.height - 8))}px`;
-        if (submenuEntry && submenuPanel) {
-            const menuBounds = menu.getBoundingClientRect();
-            if (menuBounds.right + 220 > window.innerWidth - 8) {
-                submenuEntry.classList.add("gifboard-context-submenu--left");
-            }
-        }
         this.contextMenu = menu;
         this.onContextOutside = event => {
             if (!menu.contains(event.target)) this.closeContextMenu();
@@ -2145,6 +2544,59 @@ module.exports = class GIFboardPlus {
         };
         document.addEventListener("click", this.onContextOutside);
         document.addEventListener("keydown", this.onContextKey, true);
+        menu.querySelector("button")?.focus();
+    }
+
+    createContextSubmenu(label, items, menu, panelLabel = "GIF folders") {
+        const entry = document.createElement("div");
+        entry.className = "gifboard-context-submenu";
+        const submenuId = `gifboard-submenu-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const trigger = this.makeButton(label, () => {}, "gifboard-context-submenu-trigger");
+        trigger.setAttribute("aria-haspopup", "menu");
+        trigger.setAttribute("aria-expanded", "false");
+        trigger.setAttribute("aria-controls", submenuId);
+        const panel = document.createElement("div");
+        panel.id = submenuId;
+        panel.className = "gifboard-context-submenu-panel";
+        panel.setAttribute("role", "menu");
+        panel.setAttribute("aria-label", this.t(panelLabel));
+        panel.append(...items);
+        entry.append(trigger, panel);
+
+        const open = () => {
+            entry.classList.add("is-open");
+            trigger.setAttribute("aria-expanded", "true");
+            const triggerBounds = trigger.getBoundingClientRect();
+            const entryBounds = entry.getBoundingClientRect();
+            if (menu.getBoundingClientRect().right + panel.getBoundingClientRect().width > window.innerWidth - 8) {
+                entry.classList.add("gifboard-context-submenu--left");
+            }
+            else {
+                entry.classList.remove("gifboard-context-submenu--left");
+            }
+            const panelHeight = Math.min(panel.scrollHeight, window.innerHeight - 16);
+            const panelTop = Math.max(8, Math.min(triggerBounds.top, window.innerHeight - panelHeight - 8));
+            panel.style.top = `${panelTop - entryBounds.top}px`;
+        };
+        const close = () => {
+            entry.classList.remove("is-open");
+            trigger.setAttribute("aria-expanded", "false");
+        };
+        trigger.addEventListener("mouseenter", open);
+        trigger.addEventListener("focus", open);
+        trigger.addEventListener("click", event => {
+            event.preventDefault();
+            open();
+        });
+        entry.addEventListener("mouseleave", event => {
+            if (event.relatedTarget instanceof Node && entry.contains(event.relatedTarget)) return;
+            if (!entry.contains(document.activeElement)) close();
+        });
+        entry.addEventListener("focusout", event => {
+            if (event.relatedTarget instanceof Node && entry.contains(event.relatedTarget)) return;
+            close();
+        });
+        return entry;
     }
 
     createContextFolderButtons(gif) {
@@ -2155,8 +2607,11 @@ module.exports = class GIFboardPlus {
             })];
         }
         return this.state.folders.map(folder => {
-            const exists = folder.gifs.some(item => gifKey(item) === gifKey(gif));
-            const button = this.makeButton(`${exists ? "✓ " : ""}${folder.name}`, () => {}, "", false);
+            const existing = folder.gifs.find(item => gifKey(item) === gifKey(gif));
+            const exists = Boolean(existing);
+            const refreshable = exists && (existing.url !== gif.url || existing.previewUrl !== gif.previewUrl);
+            const button = this.makeButton(`${refreshable ? "↻ " : exists ? "✓ " : ""}${folder.name}`, () => {}, "", false);
+            button.disabled = exists && !refreshable;
             button.dataset.folderId = folder.id;
             button.setAttribute("role", "menuitem");
             let pointerSelected = false;
@@ -2233,7 +2688,7 @@ module.exports = class GIFboardPlus {
 
     selectContextFolder(folder, gif, exists) {
         if (exists) {
-            this.notify(this.t('"{name}" already contains this GIF.', {name: folder.name}), "info");
+            this.addGifToFolder(folder.id, gif);
             this.closeContextMenu();
             return;
         }
@@ -2249,14 +2704,88 @@ module.exports = class GIFboardPlus {
         this.onContextKey = null;
     }
 
-    async sendGif(gif, trigger) {
-        if (gif.dataUrl) {
-            this.notify("Local GIFs can be previewed, but sending them from the library is not available yet.", "error");
-            return;
+    async sendLocalGif(gif, channelId) {
+        const dataUrl = safeLocalGifDataUrl(gif.dataUrl);
+        if (!dataUrl) throw new Error("The saved GIF data is invalid. No message was sent.");
+        const binary = atob(dataUrl.slice(dataUrl.indexOf(",") + 1));
+        if (!/^GIF8[79]a/.test(binary.slice(0, 6))) {
+            throw new Error("The saved GIF data is invalid. No message was sent.");
         }
-        const url = preferredGifUrl(gif.url);
-        if (!url) return this.notify("This GIF has an invalid URL.", "error");
-        const key = url.toLowerCase();
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+
+        const baseName = (gif.filename || gif.title || "GIF")
+            .replace(/\.gif$/i, "")
+            .replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
+            .trim()
+            .slice(0, 120) || "GIF";
+        const file = new File([bytes], `${baseName}.gif`, {type: "image/gif"});
+        file.platform = 1;
+        file.spoiler = false;
+
+        const composers = Array.from(document.querySelectorAll('[data-slate-editor="true"][contenteditable="true"]'))
+            .filter(composer => {
+                const rect = composer.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            });
+        const composer = composers.length === 1 ? composers[0] : null;
+        const composerRoot = composer?.closest('[class*="channelTextArea"]') || composer?.parentElement || null;
+        const hasExistingAttachments = Boolean(composerRoot && (
+            Array.from(composerRoot.querySelectorAll("img,video")).some(media => !composer.contains(media)) ||
+            Array.from(composerRoot.querySelectorAll("button")).some(button =>
+                /remove|delete|убрать|удалить/i.test([
+                    button.getAttribute("aria-label"),
+                    button.getAttribute("title"),
+                    button.getAttribute("data-tooltip-content")
+                ].filter(Boolean).join(" ")))
+        ));
+        const canAutoSend = Boolean(composer && composerRoot && !composer.innerText.trim() && !hasExistingAttachments);
+
+        const FilesUpload = this.api.Webpack.getModule(
+            this.api.Webpack.Filters.byKeys("addFiles"),
+            {searchExports: true}
+        ) || this.api.Webpack.getByKeys("addFiles");
+        if (typeof FilesUpload?.addFiles !== "function") {
+            throw new Error("Discord's attachment uploader is unavailable. GIF was not sent.");
+        }
+        await FilesUpload.addFiles({
+            channelId,
+            draftType: 0,
+            files: [{file, platform: 1}],
+            showLargeMessageDialog: false
+        });
+
+        if (!canAutoSend) return false;
+        const findSendButton = () => {
+            let root = composerRoot;
+            for (let depth = 0; root && depth < 5; depth++, root = root.parentElement) {
+                const button = Array.from(root.querySelectorAll("button")).find(item =>
+                    /send|отправить/i.test([
+                        item.getAttribute("aria-label"),
+                        item.getAttribute("title"),
+                        item.getAttribute("data-tooltip-content"),
+                        item.innerText
+                    ].filter(Boolean).join(" ")));
+                if (button || root.matches('[class*="channelTextArea"]')) return button || null;
+            }
+            return null;
+        };
+        for (let attempt = 0; attempt < 50; attempt++) {
+            const sendButton = findSendButton();
+            if (sendButton && !sendButton.disabled && sendButton.getAttribute("aria-disabled") !== "true") {
+                sendButton.click();
+                return true;
+            }
+            await new Promise(resolve => window.setTimeout(resolve, 100));
+        }
+        return false;
+    }
+
+    async sendGif(gif, trigger, folderId = null) {
+        const isLocalGif = Boolean(gif.dataUrl);
+        const url = isLocalGif ? null : preferredGifUrl(gif.url);
+        if (!isLocalGif && !url) return this.notify("This GIF has an invalid URL.", "error");
+        const key = isLocalGif ? gifKey(gif) : url.toLowerCase();
         if (this.sendingGifs.has(key)) return;
         this.sendingGifs.add(key);
         if (trigger) trigger.disabled = true;
@@ -2267,17 +2796,17 @@ module.exports = class GIFboardPlus {
                 return this.notify("No text channel is selected. Open a chat and try again.", "error");
             }
 
-            const messageUtils = this.api.Webpack.getModule(
-                this.api.Webpack.Filters.byKeys("sendMessage")
-            );
-            if (typeof messageUtils?.sendMessage !== "function") {
+            const pendingReplyStore = this.api.Webpack.getStore("PendingReplyStore");
+            const pendingReply = pendingReplyStore?.getPendingReply?.(channelId);
+            const messageUtils = !isLocalGif
+                ? this.api.Webpack.getModule(this.api.Webpack.Filters.byKeys("sendMessage"))
+                : null;
+            if (!isLocalGif && typeof messageUtils?.sendMessage !== "function") {
                 return this.notify("Discord's message sender is unavailable. No message was sent.", "error");
             }
 
-            const pendingReplyStore = this.api.Webpack.getStore("PendingReplyStore");
-            const pendingReply = pendingReplyStore?.getPendingReply?.(channelId);
             let sendOptions = {};
-            if (pendingReply) {
+            if (pendingReply && !isLocalGif) {
                 if (typeof messageUtils.getSendMessageOptionsForReply !== "function") {
                     return this.notify("Discord's reply handler is unavailable. GIF was not sent.", "error");
                 }
@@ -2287,7 +2816,14 @@ module.exports = class GIFboardPlus {
                 }
             }
 
-            await messageUtils.sendMessage(channelId, {content: url}, undefined, sendOptions);
+            const sent = isLocalGif
+                ? await this.sendLocalGif(gif, channelId)
+                : (await messageUtils.sendMessage(channelId, {content: url}, undefined, sendOptions), true);
+            if (!sent) {
+                this.notify("GIF attached to Discord's composer. Click Send to send it.");
+                return;
+            }
+            if (folderId !== null) this.incrementGifUsage(folderId, gifKey(gif));
             if (pendingReply) {
                 try {
                     const dispatcher = this.api.Webpack.getModule(
