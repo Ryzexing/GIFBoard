@@ -1,8 +1,10 @@
 /**
  * @name GIFboard+
- * @author Razik
- * @version 2.2.29
+ * @author Ryzex
+ * @version 2.2.30
  * @description Organize, search, and send GIFs from your personal library.
+ * @marketplaceSlug gifboard
+ * @marketplaceVersion git-45134b9
  */
 
 const PLUGIN_NAME = "GIFboard+";
@@ -194,14 +196,15 @@ const STYLE = `
 .gifboard-main{display:flex;flex:1;min-width:0;min-height:0;flex-direction:column}
 .gifboard-folder-actions{display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px}
 .gifboard-folder-actions button{flex:1 1 72px}
-.gifboard-grid{display:grid;grid-template-columns:repeat(auto-fill,var(--gifboard-card-width,140px));align-content:start;gap:8px;flex:1;min-width:0;min-height:0;overflow:auto;padding:10px}
-.gifboard-card{position:relative;min-width:0;overflow:hidden;border-radius:6px;background:var(--background-secondary,#232428)}
+.gifboard-grid{display:grid;grid-template-columns:repeat(auto-fill,var(--gifboard-card-width,140px));grid-auto-rows:1px;grid-auto-flow:row dense;align-content:start;gap:8px;flex:1;min-width:0;min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;padding:10px}
+.gifboard-card{position:relative;align-self:start;min-width:0;overflow:hidden;border-radius:6px;background:transparent}
 .gifboard-file-size{position:absolute;top:6px;left:6px;z-index:1;max-width:calc(100% - 12px);overflow:hidden;padding:3px 6px;border-radius:4px;background:rgba(0,0,0,.72);color:#fff;font-size:11px;text-overflow:ellipsis;white-space:nowrap;pointer-events:none}
 .gifboard-preview{display:block;width:100%;padding:0;border:0;border-radius:6px 6px 0 0;background:transparent;text-align:left}
+.gifboard-card .gifboard-preview{padding:0;border-radius:0;background:transparent}
 .gifboard-preview:hover{filter:brightness(1.08)}
 .gifboard-preview:disabled{cursor:wait;opacity:.65}
-.gifboard-card img,.gifboard-card video{display:block;width:100%;height:auto;aspect-ratio:4/3;object-fit:cover;background:var(--background-tertiary,#1e1f22)}
-.gifboard-card-label{overflow:hidden;padding:5px 7px;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.gifboard-media-frame{display:block;width:100%;aspect-ratio:4 / 3;overflow:hidden;background:var(--background-tertiary,#1e1f22)}
+.gifboard-card img,.gifboard-card video{position:static;display:block;width:100%;height:auto;max-height:none;object-fit:contain}
 .gifboard-empty{padding:18px;color:var(--text-muted,#949ba4)}
 .gifboard-context{position:fixed;z-index:2147483647;display:grid;gap:4px;min-width:190px;padding:8px;border:1px solid var(--background-modifier-accent,rgba(255,255,255,.12));border-radius:6px;background:var(--background-floating,#18191c);box-shadow:0 8px 24px rgba(0,0,0,.35)}
 .gifboard-context button{text-align:left}
@@ -1067,6 +1070,28 @@ module.exports = class GIFboardPlus {
 
     applyCardWidth() {
         this.overlay?.style.setProperty("--gifboard-card-width", `${this.settings.cardWidth}px`);
+        this.overlay?.querySelectorAll(".gifboard-card").forEach(card => this.updateMasonryCard(card));
+    }
+
+    updateMasonryCard(card) {
+        const frame = card.querySelector(".gifboard-media-frame");
+        const media = frame?.querySelector("img,video");
+        const width = card.getBoundingClientRect().width;
+        if (!width) return;
+
+        const naturalWidth = media?.naturalWidth || media?.videoWidth;
+        const naturalHeight = media?.naturalHeight || media?.videoHeight;
+        const height = naturalWidth && naturalHeight
+            ? width * naturalHeight / naturalWidth
+            : frame
+                ? width * 0.75
+                : card.getBoundingClientRect().height;
+        if (frame && naturalWidth && naturalHeight) {
+            frame.style.aspectRatio = `${naturalWidth} / ${naturalHeight}`;
+        }
+        const rowHeight = 1;
+        const rowGap = 8;
+        card.style.gridRowEnd = `span ${Math.max(1, Math.ceil((height + rowGap) / (rowHeight + rowGap)))}`;
     }
 
     onLibraryWheel = event => {
@@ -1686,7 +1711,11 @@ module.exports = class GIFboardPlus {
                 : "addedAt";
         gifs.sort((left, right) => right[sortField] - left[sortField]);
         if (!this.sortDescending) gifs.reverse();
-        gifs.forEach(gif => grid.append(this.createGifCard(folder, gif)));
+        gifs.forEach(gif => {
+            const card = this.createGifCard(folder, gif);
+            grid.append(card);
+            this.updateMasonryCard(card);
+        });
     }
 
     createGifCard(folder, gif) {
@@ -1705,6 +1734,8 @@ module.exports = class GIFboardPlus {
         preview.addEventListener("click", () => this.sendGif(gif, preview, folder.id));
         const previewUrl = gif.previewUrl || gif.dataUrl || gif.url;
         const mediaUrls = [...new Set([previewUrl, gif.url, gif.dataUrl].filter(Boolean))];
+        const mediaFrame = document.createElement("div");
+        mediaFrame.className = "gifboard-media-frame";
         const createMedia = (src, index) => {
             const isVideo = /\.(?:mp4|webm|mov)(?:$|[?#])/i.test(src);
             const media = document.createElement(isVideo ? "video" : "img");
@@ -1720,6 +1751,7 @@ module.exports = class GIFboardPlus {
                 media.alt = gif.title || this.t("Saved GIF");
                 media.loading = "lazy";
             }
+            media.addEventListener(isVideo ? "loadedmetadata" : "load", () => this.updateMasonryCard(card), {once: true});
             media.addEventListener("error", () => {
                 if (index + 1 < mediaUrls.length) {
                     media.replaceWith(createMedia(mediaUrls[index + 1], index + 1));
@@ -1729,16 +1761,15 @@ module.exports = class GIFboardPlus {
                 const unavailable = document.createElement("div");
                 unavailable.className = "gifboard-empty";
                 unavailable.textContent = this.t("Preview unavailable");
-                card.prepend(unavailable);
+                mediaFrame.replaceWith(unavailable);
+                this.updateMasonryCard(card);
             }, {once: true});
             media.src = src;
             if (isVideo) media.load();
             return media;
         };
         const media = createMedia(mediaUrls[0], 0);
-        const caption = document.createElement("div");
-        caption.className = "gifboard-card-label";
-        caption.textContent = gif.title || gif.filename || this.t("GIF");
+        mediaFrame.append(media);
         if (gif.dataUrl) {
             const fileSize = document.createElement("span");
             fileSize.className = "gifboard-file-size";
@@ -1746,7 +1777,7 @@ module.exports = class GIFboardPlus {
             fileSize.title = gif.filename || this.t("GIF");
             card.append(fileSize);
         }
-        preview.append(media, caption);
+        preview.append(mediaFrame);
         card.append(preview);
         return card;
     }
@@ -2141,9 +2172,13 @@ module.exports = class GIFboardPlus {
     }
 
     addToDiscordFavorites(gif) {
-        if (gif.isFavorite === true) return;
-        const control = gif.favoriteControl;
-        if (!control?.isConnected || gif.isFavorite !== false) {
+        const target = gif.favoriteTarget;
+        const boundary = target && this.picker?.contains(target) ? this.picker : null;
+        const detected = target?.isConnected ? this.findFavoriteControl(target, boundary) : null;
+        const control = detected?.element || gif.favoriteControl;
+        const state = detected?.isFavorite ?? gif.isFavorite ?? this.getFavoriteControlState(control);
+        if (state === true) return;
+        if (!control?.isConnected || state !== false) {
             this.notify("GIF was saved to your folder, but Discord's Favorites button or its state could not be identified.", "error");
             return;
         }
@@ -2458,7 +2493,12 @@ module.exports = class GIFboardPlus {
     findFavoriteControl(media, boundary) {
         const favoriteLabel = /favorite|favourite|избран|звезд|star/i;
         let current = media;
-        for (let depth = 0; current && depth < 8; depth++, current = current.parentElement) {
+        for (let depth = 0; current && depth < 16; depth++, current = current.parentElement) {
+            const nestedMedia = current.querySelectorAll("img,video");
+            if (current !== media && nestedMedia.length > 2) {
+                if (current === boundary) break;
+                continue;
+            }
             const controls = [];
             if (current.matches("button,[role='button']")) controls.push(current);
             controls.push(...current.querySelectorAll("button,[role='button']"));
@@ -2723,15 +2763,16 @@ module.exports = class GIFboardPlus {
         file.platform = 1;
         file.spoiler = false;
 
-        const composers = Array.from(document.querySelectorAll('[data-slate-editor="true"][contenteditable="true"]'))
+        const getVisibleComposers = () => Array.from(document.querySelectorAll('[data-slate-editor="true"][contenteditable="true"]'))
             .filter(composer => {
                 const rect = composer.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
             });
+        const composers = getVisibleComposers();
         const composer = composers.length === 1 ? composers[0] : null;
         const composerRoot = composer?.closest('[class*="channelTextArea"]') || composer?.parentElement || null;
         const hasExistingAttachments = Boolean(composerRoot && (
-            Array.from(composerRoot.querySelectorAll("img,video")).some(media => !composer.contains(media)) ||
+            composerRoot.querySelector("[data-attachment-id]") ||
             Array.from(composerRoot.querySelectorAll("button")).some(button =>
                 /remove|delete|убрать|удалить/i.test([
                     button.getAttribute("aria-label"),
@@ -2757,10 +2798,14 @@ module.exports = class GIFboardPlus {
 
         if (!canAutoSend) return false;
         const findSendButton = () => {
-            let root = composerRoot;
+            const currentComposers = getVisibleComposers();
+            if (currentComposers.length !== 1 || currentComposers[0].innerText.trim()) return null;
+            const currentComposer = currentComposers[0];
+            let root = currentComposer.closest('[class*="channelTextArea"]') || currentComposer.parentElement;
             for (let depth = 0; root && depth < 5; depth++, root = root.parentElement) {
-                const button = Array.from(root.querySelectorAll("button")).find(item =>
-                    /send|отправить/i.test([
+                const buttons = Array.from(root.querySelectorAll("button"));
+                const button = buttons.find(item => item.type === "submit") || buttons.find(item =>
+                    /^(?:send(?: message| a message)?|отправить(?: сообщение)?)$/i.test([
                         item.getAttribute("aria-label"),
                         item.getAttribute("title"),
                         item.getAttribute("data-tooltip-content"),
