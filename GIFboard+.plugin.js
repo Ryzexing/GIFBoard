@@ -1,7 +1,7 @@
 /**
  * @name GIFboard+
  * @author Razik
- * @version 2.2.26
+ * @version 2.2.27
  * @description Organize, search, and send GIFs from your personal library.
  */
 
