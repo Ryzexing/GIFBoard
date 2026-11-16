@@ -1,14 +1,14 @@
 /**
  * @name GIFboard+
  * @author Ryzex
- * @version 2.2.30
+ * @version 2.2.31
  * @description Organize, search, and send GIFs from your personal library.
  * @marketplaceSlug gifboard
- * @marketplaceVersion git-45134b9
+ * @marketplaceVersion git-ec9fc03
  */
 
 const PLUGIN_NAME = "GIFboard+";
-const DEFAULT_SIZE = {width: 480, height: 560, sidebarWidth: 155, cardWidth: 140, opacity: 0.94, hideOnRightClick: true, autoFavorite: false, convertImagesToGif: true, keepWithinScreen: true, left: null, top: null};
+const DEFAULT_SIZE = {width: 480, height: 560, sidebarWidth: 155, cardWidth: 140, opacity: 0.94, hideOnRightClick: true, autoFavorite: false, convertImagesToGif: true, dontOpenOnAdd: false, keepWithinScreen: true, left: null, top: null};
 const SIZE_LIMITS = {minWidth: 320, maxWidth: 4096, minHeight: 240, maxHeight: 2160, minSidebarWidth: 100, maxSidebarWidth: 360, minCardWidth: 100, maxCardWidth: 480};
 const MAX_IMAGE_CONVERSION_BYTES = 10 * 1024 * 1024;
 const MAX_GIF_DIMENSION = 1024;
@@ -24,6 +24,7 @@ const RU_TRANSLATIONS = {
     "Add to Favorites when saving to a folder": "В избранное при добавлении в папку",
     "Convert images to GIF when saving to a folder": "Преобразовывать изображения в GIF при добавлении в папку",
     "When enabled, images are converted and stored locally in the config as Base64, so they remain available if the original is deleted from chat. When disabled, only a link is saved, and the image may become unavailable if the original is deleted.": "При включённой настройке изображения преобразуются и сохраняются локально в конфиге в формате Base64, поэтому останутся доступны, даже если оригинал удалить из чата. При выключенной настройке сохраняется только ссылка, и изображение может стать недоступным после удаления оригинала.",
+    "Do not open GIF library when saving to a folder": "Не открывать окно GIF-библиотеки при добавлении в папку",
     "Hide on right-click in empty space": "Скрывать правым щелчком по пустой области",
     "Keep within screen bounds": "Придерживаться границ экрана",
     "Personal GIF library": "Личная библиотека GIF",
@@ -103,10 +104,9 @@ const RU_TRANSLATIONS = {
     "Image saved as a link because GIF conversion failed. Its preview may expire.": "Изображение сохранено ссылкой: не удалось преобразовать его в GIF, предпросмотр может со временем пропасть.",
     "Image converted to GIF.": "Изображение преобразовано в GIF.",
     "Image conversion started.": "Начато преобразование изображения.",
-    "GIF was saved to your folder, but Discord's Favorites button or its state could not be identified.": "GIF сохранён в папку, но не удалось определить кнопку избранного Discord или её состояние.",
-    "GIF was saved, but Discord did not confirm the Favorites change.": "GIF сохранён, но Discord не подтвердил добавление в избранное.",
     "GIF added to Discord Favorites.": "GIF добавлен в избранное Discord.",
     "GIF was saved, but could not be added to Discord Favorites.": "GIF сохранён, но не удалось добавить его в избранное Discord.",
+    "GIF was saved, but could not be added to Discord Favorites: {error}": "GIF сохранён, но не удалось добавить его в избранное Discord: {error}",
     "This GIF has an invalid URL.": "У GIF некорректная ссылка.",
     "No text channel is selected. Open a chat and try again.": "Текстовый канал не выбран. Откройте чат и попробуйте снова.",
     "Discord's message sender is unavailable. No message was sent.": "Отправка сообщений Discord недоступна. Сообщение не отправлено.",
@@ -606,6 +606,9 @@ module.exports = class GIFboardPlus {
             this.settings.convertImagesToGif = typeof storedSettings.convertImagesToGif === "boolean"
                 ? storedSettings.convertImagesToGif
                 : DEFAULT_SIZE.convertImagesToGif;
+            this.settings.dontOpenOnAdd = typeof storedSettings.dontOpenOnAdd === "boolean"
+                ? storedSettings.dontOpenOnAdd
+                : DEFAULT_SIZE.dontOpenOnAdd;
             this.settings.keepWithinScreen = typeof storedSettings.keepWithinScreen === "boolean"
                 ? storedSettings.keepWithinScreen
                 : DEFAULT_SIZE.keepWithinScreen;
@@ -694,6 +697,7 @@ module.exports = class GIFboardPlus {
         panel.append(this.createHideOnRightClickControl());
         panel.append(this.createAutoFavoriteControl());
         panel.append(this.createConvertImagesControl());
+        panel.append(this.createDontOpenOnAddControl());
         panel.append(this.createKeepWithinScreenControl());
         panel.append(this.makeButton("Reset to default", () => {
             this.settings = {...DEFAULT_SIZE};
@@ -711,6 +715,8 @@ module.exports = class GIFboardPlus {
             if (autoFavorite) autoFavorite.checked = this.settings.autoFavorite;
             const convertImagesToGif = panel.querySelector("[data-setting='convertImagesToGif']");
             if (convertImagesToGif) convertImagesToGif.checked = this.settings.convertImagesToGif;
+            const dontOpenOnAdd = panel.querySelector("[data-setting='dontOpenOnAdd']");
+            if (dontOpenOnAdd) dontOpenOnAdd.checked = this.settings.dontOpenOnAdd;
             const keepWithinScreen = panel.querySelector("[data-setting='keepWithinScreen']");
             if (keepWithinScreen) keepWithinScreen.checked = this.settings.keepWithinScreen;
             this.geometry = null;
@@ -793,6 +799,23 @@ module.exports = class GIFboardPlus {
         warning.setAttribute("aria-label", this.t("When enabled, images are converted and stored locally in the config as Base64, so they remain available if the original is deleted from chat. When disabled, only a link is saved, and the image may become unavailable if the original is deleted."));
         warning.dataset.tooltip = this.t("When enabled, images are converted and stored locally in the config as Base64, so they remain available if the original is deleted from chat. When disabled, only a link is saved, and the image may become unavailable if the original is deleted.");
         row.append(checkbox, caption, warning);
+        return row;
+    }
+
+    createDontOpenOnAddControl() {
+        const row = document.createElement("label");
+        row.className = "gifboard-setting-row";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = this.settings.dontOpenOnAdd;
+        checkbox.dataset.setting = "dontOpenOnAdd";
+        checkbox.addEventListener("change", () => {
+            this.settings.dontOpenOnAdd = checkbox.checked;
+            this.scheduleSaveSettings();
+        });
+        const caption = document.createElement("span");
+        caption.textContent = this.t("Do not open GIF library when saving to a folder");
+        row.append(checkbox, caption);
         return row;
     }
 
@@ -1534,6 +1557,7 @@ module.exports = class GIFboardPlus {
             this.createHideOnRightClickControl(),
             this.createAutoFavoriteControl(),
             this.createConvertImagesControl(),
+            this.createDontOpenOnAddControl(),
             this.createKeepWithinScreenControl()
         );
         const exportButton = this.makeButton("Export", () => this.exportLibrary());
@@ -2036,6 +2060,10 @@ module.exports = class GIFboardPlus {
             filename: "",
             sizeBytes: null,
             previewUrl: preferredPreviewUrl(rawGif.previewUrl) || preferredPreviewUrl(rawUrl) || url,
+            favoriteSrc: rawGif.favoriteSrc || rawGif.src || rawGif.proxyUrl || rawGif.previewUrl || rawUrl || url,
+            width: rawGif.width || 0,
+            height: rawGif.height || 0,
+            favoriteTarget: rawGif.favoriteTarget || null,
             title: cleanGifTitle(rawGif.title || ""),
             addedAt: Date.now()
         };
@@ -2067,9 +2095,9 @@ module.exports = class GIFboardPlus {
             conversionRequested = shouldConvertImage;
         });
         if (success) {
-            if (added && this.settings.autoFavorite && !shouldConvertImage) this.addToDiscordFavorites(rawGif);
+            if (added && this.settings.autoFavorite && !shouldConvertImage) this.addToDiscordFavorites(gif);
             this.selectedFolder = folderId;
-            this.toggleLibrary(true);
+            if (!this.settings.dontOpenOnAdd) this.toggleLibrary(true);
             if (conversionRequested) {
                 this.notify(added ? "GIF added to folder." : "Image conversion started.");
                 this.convertSavedImageToGif(folderId, key, gif.previewUrl);
@@ -2171,39 +2199,131 @@ module.exports = class GIFboardPlus {
         }
     }
 
-    addToDiscordFavorites(gif) {
-        const target = gif.favoriteTarget;
-        const boundary = target && this.picker?.contains(target) ? this.picker : null;
-        const detected = target?.isConnected ? this.findFavoriteControl(target, boundary) : null;
-        const control = detected?.element || gif.favoriteControl;
-        const state = detected?.isFavorite ?? gif.isFavorite ?? this.getFavoriteControlState(control);
-        if (state === true) return;
-        if (!control?.isConnected || state !== false) {
-            this.notify("GIF was saved to your folder, but Discord's Favorites button or its state could not be identified.", "error");
-            return;
-        }
+    async addToDiscordFavorites(gif) {
         try {
-            control.click();
-            window.setTimeout(() => {
-                let currentControl = gif.favoriteTarget?.isConnected
-                    ? this.findFavoriteControl(gif.favoriteTarget, null)?.element || null
-                    : null;
-                if (!currentControl && control.isConnected) currentControl = control;
-                if (!currentControl) {
-                    this.notify("GIF was saved, but Discord did not confirm the Favorites change.", "error");
+            const filters = this.api.Webpack.Filters;
+            const favModule = this.api.Webpack.getModule(
+                filters.byStrings("favoriteGifs", "order", "src"),
+                {searchExports: true}
+            );
+            const protoModule = this.api.Webpack.getModule(
+                filters.byStrings("favoriteGifs", "updateAsync"),
+                {searchExports: true}
+            ) || this.api.Webpack.getModule(
+                module => typeof module?.updateAsync === "function" &&
+                    module?.ProtoClass?.typeName?.includes("Frecency"),
+                {searchExports: true}
+            );
+
+            const media = gif.favoriteTarget;
+            const rect = media?.getBoundingClientRect?.();
+            const width = Math.max(1, Number(
+                gif.width || media?.naturalWidth || media?.videoWidth || media?.width || rect?.width
+            ) || 498);
+            const height = Math.max(1, Number(
+                gif.height || media?.naturalHeight || media?.videoHeight || media?.height || rect?.height
+            ) || 280);
+            const src = gif.favoriteSrc || gif.src || gif.previewUrl || gif.url;
+
+            const favorite = {
+                url: gif.url,
+                src,
+                width,
+                height,
+                format: 2,
+                order: 0
+            };
+            const proto = protoModule?.default || protoModule;
+            const favoriteGifs = proto?.getCurrentValue?.()?.favoriteGifs?.gifs ||
+                proto?.getState?.()?.favoriteGifs?.gifs;
+            if (favoriteGifs && Object.prototype.hasOwnProperty.call(favoriteGifs, favorite.url)) return;
+
+            const actionCandidates = [
+                favModule,
+                ...Object.values(favModule || {}),
+                ...Object.values(favModule?.default || {})
+            ];
+            const addFavoriteGIF = actionCandidates.find(candidate =>
+                typeof candidate === "function" &&
+                candidate.toString().includes("favoriteGifs") &&
+                candidate.toString().includes("order") &&
+                candidate.toString().includes("src")
+            );
+            if (typeof addFavoriteGIF === "function") {
+                try {
+                    await addFavoriteGIF(favorite);
+                    this.notify("GIF added to Discord Favorites.");
                     return;
                 }
-                if (this.getFavoriteControlState(currentControl) === true) {
-                    this.notify("GIF added to Discord Favorites.");
+                catch (error) {
+                    console.warn(`[${PLUGIN_NAME}] Discord's GIF Favorites action failed; trying the settings store.`, error);
                 }
-                else {
-                    this.notify("GIF was saved, but Discord did not confirm the Favorites change.", "error");
+            }
+
+            const updater = typeof proto?.updateAsync === "function"
+                ? proto
+                : Object.values(proto || {}).find(value => typeof value?.updateAsync === "function");
+            if (updater) {
+                let updated = false;
+                await updater.updateAsync("favoriteGifs", value => {
+                    if (!value || typeof value !== "object") {
+                        throw new Error("Discord's GIF Favorites data is unavailable.");
+                    }
+                    if (!value.gifs || typeof value.gifs !== "object") value.gifs = {};
+                    if (Object.prototype.hasOwnProperty.call(value.gifs, favorite.url)) {
+                        updated = true;
+                        return;
+                    }
+
+                    const currentOrder = Object.values(value.gifs).reduce(
+                        (maximum, item) => Math.max(maximum, Number(item?.order) || 0),
+                        0
+                    );
+                    value.gifs[favorite.url] = {
+                        src: favorite.src,
+                        format: favorite.format,
+                        order: currentOrder + 1,
+                        width: favorite.width,
+                        height: favorite.height
+                    };
+                    updated = true;
+                }, 0);
+                if (!updated) {
+                    if (favoriteGifs && Object.prototype.hasOwnProperty.call(favoriteGifs, favorite.url)) return;
+                    throw new Error("Discord's GIF Favorites store did not update.");
                 }
-            }, 500);
+                this.notify("GIF added to Discord Favorites.");
+                return;
+            }
+
+            const container = media?.closest?.(
+                '[class*="gif"], [class*="result"], [class*="imageWrapper"], [class*="messageAttachment"]'
+            );
+            const starButton = container?.querySelector?.(
+                '[aria-label*="избранн" i], [aria-label*="favorite" i], [class*="favButton"]'
+            );
+            const starLabel = [
+                starButton?.getAttribute?.("aria-label"),
+                starButton?.getAttribute?.("title"),
+                starButton?.getAttribute?.("data-tooltip-content"),
+                starButton?.innerText
+            ].filter(Boolean).join(" ");
+            if (starButton && !/remove|unfavorite|убрать|удалить/i.test(starLabel) &&
+                !/selected|active/i.test(String(starButton.className || ""))) {
+                starButton.click();
+                this.notify("GIF added to Discord Favorites.");
+                return;
+            }
+
+            throw new Error("Discord's GIF Favorites actions are unavailable.");
         }
         catch (error) {
             console.error(`[${PLUGIN_NAME}] Could not add GIF to Discord Favorites:`, error);
-            this.notify("GIF was saved, but could not be added to Discord Favorites.", "error");
+            this.notify(
+                this.t("GIF was saved, but could not be added to Discord Favorites: {error}")
+                    .replace("{error}", this.translateError(error?.message || "unknown error")),
+                "error"
+            );
         }
     }
 
@@ -2275,14 +2395,14 @@ module.exports = class GIFboardPlus {
         const menuLocation = this.findContextMenuItems(returnValue);
         if (!menuLocation || this.hasContextMenuItem(returnValue, "gifboard-add-to-folder")) return returnValue;
 
-        const favorite = targetMedia ? this.findFavoriteControl(targetMedia, null) : null;
         const gif = {
             url,
             previewUrl: preferredPreviewUrl(previewRawUrl) || preferredPreviewUrl(rawUrl) || url,
+            favoriteSrc: targetMedia?.currentSrc || targetMedia?.src || previewRawUrl || rawUrl || url,
+            width: mediaItem?.width || targetMedia?.naturalWidth || targetMedia?.videoWidth || 0,
+            height: mediaItem?.height || targetMedia?.naturalHeight || targetMedia?.videoHeight || 0,
             title: cleanGifTitle(mediaItem?.filename || mediaItem?.name || mediaItem?.alt ||
                 targetMedia?.alt || target?.alt || ""),
-            favoriteControl: favorite?.element || null,
-            isFavorite: favorite?.isFavorite ?? null,
             favoriteTarget: targetMedia,
             isVideo: isVideoMedia,
             isGif: isGifMedia,
@@ -2427,7 +2547,6 @@ module.exports = class GIFboardPlus {
                 const previewUrl = preferredPreviewUrl(poster) || preferredPreviewUrl(rawUrl) ||
                     preferredPreviewUrl(media?.currentSrc || media?.src || media?.poster) || url;
                 const title = this.getGifTitle(media);
-                const favorite = this.findFavoriteControl(media, boundary);
                 const isVideo = media?.tagName === "VIDEO" ||
                     /\.(?:mp4|webm|mov|m4v|avi|gifv)(?:$|[?#])/i.test(url);
                 const isGif = this.isKnownGifUrl(url) || /\.gif(?:$|[?#])/i.test(url);
@@ -2436,9 +2555,10 @@ module.exports = class GIFboardPlus {
                 return {
                     url,
                     previewUrl,
+                    favoriteSrc: media?.currentSrc || media?.src || url,
+                    width: media?.naturalWidth || media?.videoWidth || 0,
+                    height: media?.naturalHeight || media?.videoHeight || 0,
                     title,
-                    favoriteControl: favorite?.element || null,
-                    isFavorite: favorite?.isFavorite ?? null,
                     favoriteTarget: media,
                     isVideo,
                     isGif,
@@ -2453,14 +2573,14 @@ module.exports = class GIFboardPlus {
                 if (!url) continue;
                 if (!boundary && !this.isKnownGifUrl(url)) continue;
                 const title = this.getGifTitle(element);
-                const favorite = this.findFavoriteControl(element, boundary);
                 const isGif = this.isKnownGifUrl(url) || /\.gif(?:$|[?#])/i.test(url);
                 return {
                     url,
                     previewUrl: url,
+                    favoriteSrc: url,
+                    width: element.clientWidth || 0,
+                    height: element.clientHeight || 0,
                     title,
-                    favoriteControl: favorite?.element || null,
-                    isFavorite: favorite?.isFavorite ?? null,
                     favoriteTarget: element,
                     isVideo: false,
                     isGif,
@@ -2488,54 +2608,6 @@ module.exports = class GIFboardPlus {
             element?.getAttribute("title"),
             element?.getAttribute("data-title")
         ].find(value => typeof value === "string" && value.trim()));
-    }
-
-    findFavoriteControl(media, boundary) {
-        const favoriteLabel = /favorite|favourite|избран|звезд|star/i;
-        let current = media;
-        for (let depth = 0; current && depth < 16; depth++, current = current.parentElement) {
-            const nestedMedia = current.querySelectorAll("img,video");
-            if (current !== media && nestedMedia.length > 2) {
-                if (current === boundary) break;
-                continue;
-            }
-            const controls = [];
-            if (current.matches("button,[role='button']")) controls.push(current);
-            controls.push(...current.querySelectorAll("button,[role='button']"));
-            for (const control of controls) {
-                const label = [
-                    control.getAttribute("aria-label"),
-                    control.getAttribute("title"),
-                    control.getAttribute("data-tooltip-content"),
-                    control.innerText
-                ].filter(Boolean).join(" ").trim();
-                if (!favoriteLabel.test(label)) continue;
-                const isFavorite = this.getFavoriteControlState(control);
-                if (isFavorite !== null) return {element: control, isFavorite};
-            }
-            if (current === boundary) break;
-        }
-        return null;
-    }
-
-    getFavoriteControlState(control) {
-        const label = [
-            control?.getAttribute("aria-label"),
-            control?.getAttribute("title"),
-            control?.getAttribute("data-tooltip-content"),
-            control?.innerText
-        ].filter(Boolean).join(" ").trim();
-        if (/remove|удалить|убрать|unfavorite|убрать из избранного/i.test(label)) return true;
-        if (/add|добавить|в избранное/i.test(label)) return false;
-        for (const value of [
-            control?.getAttribute("aria-pressed"),
-            control?.getAttribute("aria-checked"),
-            control?.getAttribute("data-active")
-        ]) {
-            if (value === "true") return true;
-            if (value === "false") return false;
-        }
-        return null;
     }
 
     showContextMenu(x, y, gif, includeCopyLink = false, removeFromFolderId = null) {
