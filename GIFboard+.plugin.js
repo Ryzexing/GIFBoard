@@ -1,7 +1,7 @@
 /**
  * @name GIFboard+
  * @author Ryzex
- * @version 2.2.31
+ * @version 2.2.32
  * @description Organize, search, and send GIFs from your personal library.
  * @marketplaceSlug gifboard
  * @marketplaceVersion git-ec9fc03
