@@ -5,6 +5,8 @@
  * @description Organize, search, and send GIFs from your personal library.
  * @marketplaceSlug gifboard
  * @marketplaceVersion git-ec9fc03
+ * @metikoreSlug gifboard
+ * @metikoreVersion git-f1b87d2
  */
 
 const PLUGIN_NAME = "GIFboard+";
@@ -139,7 +141,16 @@ const RU_TRANSLATIONS = {
     "Drop GIF files onto a folder, or drop a GIFboard JSON backup anywhere in the library.": "GIF-файлы перетаскивайте на папку, а JSON-копию GIFboard — в любое место библиотеки.",
     "Import a GIFboard backup": "Импортировать резервную копию GIFboard",
     "Export a GIFboard backup": "Экспортировать резервную копию GIFboard",
-    "Add to folder": "Добавить в папку"
+    "Add to folder": "Добавить в папку",
+    "GIF folder actions": "Действия с папкой GIF",
+    "Download a JSON backup of your folders and saved GIFs.": "Скачать JSON-копию ваших папок и сохранённых GIF.",
+    "Merge a GIFboard JSON backup into this library; duplicates are skipped.": "Объединить JSON-копию GIFboard с текущей библиотекой; дубликаты пропускаются.",
+    "Could not read dropped GIF \"{name}\": {error}": "Не удалось прочитать перетащенный GIF «{name}»: {error}",
+    "Added: {added}; duplicates skipped: {duplicates}; invalid files: {invalid}.": "Добавлено: {added}; пропущено дубликатов: {duplicates}; некорректных файлов: {invalid}.",
+    "Could not save GIF picker size.": "Не удалось сохранить размер пикера GIF.",
+    "Refresh preview": "Обновить предпросмотр",
+    "GIF preview refreshed.": "Предпросмотр GIF обновлён.",
+    "Could not refresh this GIF preview. Re-save it from the chat to renew the link.": "Не удалось обновить предпросмотр GIF. Пересохраните GIF из чата, чтобы обновить ссылку."
 };
 
 const STYLE = `
@@ -295,6 +306,21 @@ function preferredPreviewUrl(value) {
         : safe;
 }
 
+function parseDiscordAttachment(value) {
+    const url = normalizeEncodedUrl(value);
+    if (!url || !/^(?:media\.discordapp\.net|cdn\.discordapp\.com)$/i.test(url.hostname)) return null;
+    const match = url.pathname.match(/^\/attachments\/(\d+)\/(\d+)\/([^/]+)$/i);
+    if (!match) return null;
+    return {channelId: match[1], attachmentId: match[2], filename: match[3]};
+}
+
+function sameAttachmentSignature(left, right) {
+    const a = normalizeEncodedUrl(left);
+    const b = normalizeEncodedUrl(right);
+    if (!a || !b || a.pathname !== b.pathname) return false;
+    return ["ex", "is", "hm"].every(key => a.searchParams.get(key) === b.searchParams.get(key));
+}
+
 function safeLocalGifDataUrl(value) {
     if (typeof value !== "string" || !/^data:image\/gif;base64,/i.test(value)) return null;
     const payload = value.slice(value.indexOf(",") + 1);
@@ -391,6 +417,12 @@ function encodeGifFrame(width, height, rgba) {
     writeByte(0);
     writeByte(0);
     for (let index = 1; index < 256; index++) {
+        if (index === 255) {
+            writeByte(255);
+            writeByte(255);
+            writeByte(255);
+            continue;
+        }
         const color = index - 1;
         writeByte(Math.round(((color >> 5) & 7) * 255 / 7));
         writeByte(Math.round(((color >> 2) & 7) * 255 / 7));
@@ -463,7 +495,7 @@ function normalizeState(value) {
             const key = url ? url.toLowerCase() : dataUrl;
             if (seen.has(key)) continue;
             seen.add(key);
-            gifs.push({
+            const normalizedGif = {
                 id: typeof item.id === "string" && item.id ? item.id : createGifId(),
                 url: url || null,
                 dataUrl,
@@ -478,7 +510,18 @@ function normalizeState(value) {
                 addedAt: Number.isFinite(item.addedAt) ? item.addedAt : Date.now(),
                 rating: Number.isInteger(item.rating) && item.rating >= 0 && item.rating <= 5 ? item.rating : 0,
                 usageCount: Number.isSafeInteger(item.usageCount) && item.usageCount >= 0 ? item.usageCount : 0
-            });
+            };
+            const sourceChannelId = typeof item.sourceChannelId === "string" && /^\d{5,25}$/.test(item.sourceChannelId)
+                ? item.sourceChannelId
+                : null;
+            const sourceMessageId = typeof item.sourceMessageId === "string" && /^\d{5,25}$/.test(item.sourceMessageId)
+                ? item.sourceMessageId
+                : null;
+            if (sourceChannelId && sourceMessageId && url) {
+                normalizedGif.sourceChannelId = sourceChannelId;
+                normalizedGif.sourceMessageId = sourceMessageId;
+            }
+            gifs.push(normalizedGif);
         }
         return {id: folder.id, name: folder.name.trim().slice(0, 80) || "Untitled", gifs};
     });
@@ -509,7 +552,7 @@ module.exports = class GIFboardPlus {
         this.contextMenuPatches = [];
         this.dialog = null;
         this.observer = null;
-        this.scanFrame = null;
+        this.scanTimer = null;
         this.settingsTimer = null;
         this.selectedFolder = null;
         this.searchTerm = "";
@@ -520,6 +563,8 @@ module.exports = class GIFboardPlus {
         this.resizeStart = null;
         this.sidebarResizeStart = null;
         this.moveStart = null;
+        this.messageFetchInFlight = new Map();
+        this.rateLimitUntil = 0;
     }
 
     start() {
@@ -547,8 +592,8 @@ module.exports = class GIFboardPlus {
     stop() {
         if (this.observer) this.observer.disconnect();
         this.observer = null;
-        if (this.scanFrame !== null) cancelAnimationFrame(this.scanFrame);
-        this.scanFrame = null;
+        if (this.scanTimer !== null) clearTimeout(this.scanTimer);
+        this.scanTimer = null;
         if (this.settingsTimer !== null) {
             clearTimeout(this.settingsTimer);
             this.settingsTimer = null;
@@ -907,11 +952,11 @@ module.exports = class GIFboardPlus {
     }
 
     scheduleScan() {
-        if (this.scanFrame !== null) return;
-        this.scanFrame = requestAnimationFrame(() => {
-            this.scanFrame = null;
+        if (this.scanTimer !== null) return;
+        this.scanTimer = setTimeout(() => {
+            this.scanTimer = null;
             this.scanPicker();
-        });
+        }, 200);
     }
 
     findPicker() {
@@ -947,6 +992,7 @@ module.exports = class GIFboardPlus {
     }
 
     scanPicker() {
+        if (this.picker?.isConnected && this.toggle?.isConnected && this.picker.contains(this.toggle)) return;
         const picker = this.findPicker();
         if (!picker) {
             if (this.picker && !this.picker.isConnected) this.detachPicker();
@@ -1776,17 +1822,28 @@ module.exports = class GIFboardPlus {
                 media.loading = "lazy";
             }
             media.addEventListener(isVideo ? "loadedmetadata" : "load", () => this.updateMasonryCard(card), {once: true});
-            media.addEventListener("error", () => {
-                if (index + 1 < mediaUrls.length) {
-                    media.replaceWith(createMedia(mediaUrls[index + 1], index + 1));
-                    return;
-                }
+            const showUnavailable = () => {
+                if (!media.isConnected) return;
                 media.remove();
                 const unavailable = document.createElement("div");
                 unavailable.className = "gifboard-empty";
                 unavailable.textContent = this.t("Preview unavailable");
                 mediaFrame.replaceWith(unavailable);
                 this.updateMasonryCard(card);
+            };
+            media.addEventListener("error", async () => {
+                if (index + 1 < mediaUrls.length) {
+                    if (media.isConnected) media.replaceWith(createMedia(mediaUrls[index + 1], index + 1));
+                    return;
+                }
+                const fresh = await this.refreshDiscordPreview(gif);
+                if (fresh && media.isConnected) {
+                    media.addEventListener("error", showUnavailable, {once: true});
+                    media.src = fresh;
+                    if (media.tagName === "VIDEO") media.load();
+                    return;
+                }
+                showUnavailable();
             }, {once: true});
             media.src = src;
             if (isVideo) media.load();
@@ -2065,6 +2122,8 @@ module.exports = class GIFboardPlus {
             height: rawGif.height || 0,
             favoriteTarget: rawGif.favoriteTarget || null,
             title: cleanGifTitle(rawGif.title || ""),
+            sourceChannelId: typeof rawGif.sourceChannelId === "string" ? rawGif.sourceChannelId : null,
+            sourceMessageId: typeof rawGif.sourceMessageId === "string" ? rawGif.sourceMessageId : null,
             addedAt: Date.now()
         };
         const key = gifKey(gif);
@@ -2086,6 +2145,10 @@ module.exports = class GIFboardPlus {
                 existing.url = gif.url;
                 existing.previewUrl = existing.dataUrl || gif.previewUrl;
                 existing.title = gif.title || existing.title;
+                if (gif.sourceChannelId && gif.sourceMessageId) {
+                    existing.sourceChannelId = gif.sourceChannelId;
+                    existing.sourceMessageId = gif.sourceMessageId;
+                }
                 refreshed = true;
                 conversionRequested = shouldConvertImage && !existing.dataUrl;
                 return;
@@ -2377,6 +2440,7 @@ module.exports = class GIFboardPlus {
             targetMedia?.currentSrc || targetMedia?.src || targetMedia?.poster ||
             embeddedMedia?.proxyUrl || embeddedMedia?.proxyURL || embeddedMedia?.url || rawUrl;
         const url = preferredGifUrl(rawUrl);
+        const attachmentInfo = parseDiscordAttachment(url);
         const contentType = mediaItem?.contentType || mediaItem?.content_type || "";
         const originalContentType = mediaItem?.originalContentType || mediaItem?.original_content_type || "";
         const isVideoMedia = /^video\//i.test(contentType) ||
@@ -2403,6 +2467,10 @@ module.exports = class GIFboardPlus {
             height: mediaItem?.height || targetMedia?.naturalHeight || targetMedia?.videoHeight || 0,
             title: cleanGifTitle(mediaItem?.filename || mediaItem?.name || mediaItem?.alt ||
                 targetMedia?.alt || target?.alt || ""),
+            sourceChannelId: attachmentInfo
+                ? (props?.message?.channel_id || props?.channel?.id || attachmentInfo.channelId)
+                : null,
+            sourceMessageId: attachmentInfo ? (props?.message?.id || null) : null,
             favoriteTarget: targetMedia,
             isVideo: isVideoMedia,
             isGif: isGifMedia,
@@ -2594,7 +2662,8 @@ module.exports = class GIFboardPlus {
     isKnownGifUrl(value) {
         try {
             const url = new URL(value);
-            return /(^|\.)((media\.)?tenor\.com|(media\.)?giphy\.com|klipy\.com)$/i.test(url.hostname) ||
+            const host = url.hostname.toLowerCase();
+            return /(^|\.)(tenor\.com|giphy\.com|klipy\.com)$/.test(host) ||
                 /\.gif$/i.test(url.pathname);
         }
         catch {
@@ -2641,6 +2710,12 @@ module.exports = class GIFboardPlus {
                 ratingButtons.push(button);
             }
             menu.append(this.createContextSubmenu("Rate GIF", ratingButtons, menu, "Rate GIF"));
+            if (parseDiscordAttachment(gif.url)) {
+                menu.append(this.makeButton("Refresh preview", () => {
+                    this.closeContextMenu();
+                    this.refreshGifPreview(gif);
+                }));
+            }
         }
         menu.append(this.createContextSubmenu("Save GIF to folder", this.createContextFolderButtons(gif), menu));
         document.documentElement.append(menu);
@@ -2761,6 +2836,232 @@ module.exports = class GIFboardPlus {
             this.notify(this.t("Could not copy GIF link: {error}", {
                 error: this.translateError(error.message)
             }), "error");
+        }
+    }
+
+    async refreshDiscordPreview(gif) {
+        try {
+            const info = parseDiscordAttachment(gif?.url);
+            const attachmentId = info?.attachmentId || null;
+            let messageId = typeof gif?.sourceMessageId === "string" && gif.sourceMessageId ? gif.sourceMessageId : null;
+            let channelId = (typeof gif?.sourceChannelId === "string" && gif.sourceChannelId) || info?.channelId || null;
+
+            if (!messageId && channelId && attachmentId) {
+                const loaded = this.findLoadedMessageByAttachment(channelId, attachmentId);
+                if (loaded?.id) messageId = String(loaded.id);
+            }
+            if (!messageId || !channelId) return this.refreshPreviewFromDom(attachmentId);
+
+            const cached = this.getCachedMessage(channelId, messageId);
+            const cachedEntry = this.pickAttachmentUrl(cached, attachmentId, info?.filename, gif.url);
+            if (cachedEntry) {
+                this.applyRefreshedUrls(messageId, channelId, this.mapAttachmentUrls(cached));
+                return cachedEntry.preview || cachedEntry.url;
+            }
+
+            const message = await this.fetchMessageOnce(channelId, messageId);
+            const freshEntry = this.pickAttachmentUrl(message, attachmentId, info?.filename, gif.url);
+            if (freshEntry) {
+                this.applyRefreshedUrls(messageId, channelId, this.mapAttachmentUrls(message));
+                return freshEntry.preview || freshEntry.url;
+            }
+            return this.refreshPreviewFromDom(attachmentId);
+        }
+        catch (error) {
+            console.error(`[${PLUGIN_NAME}] Could not refresh a GIF preview:`, error);
+            return null;
+        }
+    }
+
+    getMessageStore() {
+        try {
+            return this.api.Webpack.getStore("MessageStore") ||
+                this.api.Webpack.getModule(module => typeof module?.getMessage === "function" && module?.getMessages);
+        }
+        catch (error) {
+            console.warn(`[${PLUGIN_NAME}] Could not access the message store:`, error);
+            return null;
+        }
+    }
+
+    getCachedMessage(channelId, messageId) {
+        try {
+            const message = this.getMessageStore()?.getMessage?.(channelId, messageId);
+            return message && Array.isArray(message.attachments) ? message : null;
+        }
+        catch (error) {
+            console.warn(`[${PLUGIN_NAME}] Could not read the cached message:`, error);
+            return null;
+        }
+    }
+
+    findLoadedMessageByAttachment(channelId, attachmentId) {
+        if (!channelId || !attachmentId) return null;
+        try {
+            const collection = this.getMessageStore()?.getMessages?.(channelId);
+            const messages = Array.isArray(collection)
+                ? collection
+                : typeof collection?.toArray === "function"
+                    ? collection.toArray()
+                    : typeof collection?.values === "function"
+                        ? Array.from(collection.values())
+                        : [];
+            return messages.find(message => Array.isArray(message?.attachments) &&
+                message.attachments.some(attachment => String(attachment?.id) === String(attachmentId))) || null;
+        }
+        catch (error) {
+            console.warn(`[${PLUGIN_NAME}] Could not search loaded messages:`, error);
+            return null;
+        }
+    }
+
+    pickAttachmentUrl(message, attachmentId, filename, brokenUrl) {
+        const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
+        if (!attachments.length) return null;
+        const byId = attachmentId ? attachments.find(item => String(item.id) === String(attachmentId)) : null;
+        const byName = !byId && filename ? attachments.find(item => item.filename === filename) : null;
+        const only = !byId && !byName && !attachmentId && attachments.length === 1 ? attachments[0] : null;
+        const match = byId || byName || only;
+        if (!match) return null;
+        const url = preferredGifUrl(match.url);
+        const preview = preferredPreviewUrl(match.proxy_url) || url;
+        if (!url && !preview) return null;
+        const entry = {url: url || preview, preview: preview || url};
+        if (brokenUrl && sameAttachmentSignature(entry.url, brokenUrl)) return null;
+        return entry;
+    }
+
+    mapAttachmentUrls(message) {
+        const urls = new Map();
+        for (const attachment of Array.isArray(message?.attachments) ? message.attachments : []) {
+            if (!attachment?.id) continue;
+            const url = preferredGifUrl(attachment.url);
+            const preview = preferredPreviewUrl(attachment.proxy_url) || url;
+            if (!url && !preview) continue;
+            urls.set(String(attachment.id), {url: url || preview, preview: preview || url});
+        }
+        return urls;
+    }
+
+    applyRefreshedUrls(messageId, channelId, freshById) {
+        if (!freshById || !freshById.size || this.storageBlocked) return false;
+        const pendingFor = gif => {
+            if (messageId && gif.sourceMessageId && gif.sourceMessageId !== messageId) return null;
+            const info = parseDiscordAttachment(gif.url);
+            if (!info) return null;
+            const entry = freshById.get(String(info.attachmentId));
+            if (!entry) return null;
+            const needsUrl = Boolean(entry.url) && gif.url !== entry.url;
+            const needsPreview = Boolean(entry.preview) && !gif.dataUrl && gif.previewUrl !== entry.preview;
+            return needsUrl || needsPreview ? entry : null;
+        };
+        if (!this.state.folders.some(folder => folder.gifs.some(gif => pendingFor(gif)))) return false;
+        return this.mutateLibrary(state => {
+            for (const folder of state.folders) {
+                for (const gif of folder.gifs) {
+                    const entry = pendingFor(gif);
+                    if (!entry) continue;
+                    if (entry.url) gif.url = entry.url;
+                    if (entry.preview && !gif.dataUrl) gif.previewUrl = entry.preview;
+                    if (messageId && !gif.sourceMessageId) {
+                        gif.sourceMessageId = messageId;
+                        gif.sourceChannelId = channelId || gif.sourceChannelId || parseDiscordAttachment(gif.url)?.channelId || null;
+                    }
+                }
+            }
+        });
+    }
+
+    refreshPreviewFromDom(attachmentId) {
+        if (!attachmentId) return null;
+        const elements = document.querySelectorAll("img[src],video[src],video[poster]");
+        for (const element of elements) {
+            const candidates = [element.currentSrc, element.getAttribute("src"), element.getAttribute("poster")];
+            for (const candidate of candidates) {
+                const info = parseDiscordAttachment(candidate);
+                if (!info || String(info.attachmentId) !== String(attachmentId)) continue;
+                const live = preferredGifUrl(candidate) || preferredPreviewUrl(candidate) || null;
+                if (!live) continue;
+                this.applyRefreshedUrls(null, null, new Map([[String(attachmentId), {url: live, preview: live}]]));
+                return live;
+            }
+        }
+        return null;
+    }
+
+    async fetchMessageOnce(channelId, messageId) {
+        const key = `${channelId}:${messageId}`;
+        const inFlight = this.messageFetchInFlight.get(key);
+        if (inFlight) return inFlight;
+        const promise = this.fetchMessageFromApi(channelId, messageId)
+            .finally(() => this.messageFetchInFlight.delete(key));
+        this.messageFetchInFlight.set(key, promise);
+        return promise;
+    }
+
+    async fetchMessageFromApi(channelId, messageId) {
+        await this.waitForRateLimit();
+        try {
+            const token = this.getDiscordToken();
+            if (!token) return null;
+            const response = await fetch(`https://discord.com/api/v9/channels/${channelId}/messages/${messageId}`, {
+                headers: {Authorization: token, Accept: "application/json"}
+            });
+            if (response.status === 429) {
+                let retryAfter = this.readRetryAfter(response);
+                try {
+                    const body = await response.clone().json();
+                    const bodyDelay = Number(body?.retry_after);
+                    if (Number.isFinite(bodyDelay) && bodyDelay > 0) retryAfter = Math.max(retryAfter, bodyDelay);
+                }
+                catch (error) {
+                    // Discord does not always send a JSON body with a rate-limit response.
+                }
+                this.rateLimitUntil = Math.max(this.rateLimitUntil, Date.now() + retryAfter * 1000);
+                return null;
+            }
+            if (!response.ok) return null;
+            const message = await response.json();
+            return message && Array.isArray(message.attachments) ? message : null;
+        }
+        catch (error) {
+            console.warn(`[${PLUGIN_NAME}] Could not fetch a message for a GIF preview:`, error);
+            return null;
+        }
+    }
+
+    waitForRateLimit() {
+        const wait = this.rateLimitUntil - Date.now();
+        return wait > 0 ? new Promise(resolve => setTimeout(resolve, wait)) : Promise.resolve();
+    }
+
+    readRetryAfter(response) {
+        const header = response?.headers?.get("retry-after") || response?.headers?.get("x-ratelimit-reset-after");
+        const value = Number(header);
+        return Number.isFinite(value) && value > 0 ? value : 1;
+    }
+
+    getDiscordToken() {
+        try {
+            const module = this.api.Webpack.getModule(module => typeof module?.getToken === "function") ||
+                this.api.Webpack.getModule(this.api.Webpack.Filters.byKeys("getToken"));
+            const token = module?.getToken?.();
+            if (typeof token === "string" && token) return token;
+        }
+        catch (error) {
+            console.warn(`[${PLUGIN_NAME}] Could not read the Discord token:`, error);
+        }
+        return null;
+    }
+
+    async refreshGifPreview(gif) {
+        const fresh = await this.refreshDiscordPreview(gif);
+        if (fresh) {
+            if (this.libraryBackdrop && !this.libraryBackdrop.hidden) this.renderGrid();
+            this.notify("GIF preview refreshed.");
+        }
+        else {
+            this.notify("Could not refresh this GIF preview. Re-save it from the chat to renew the link.", "error");
         }
     }
 
